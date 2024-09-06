@@ -1,66 +1,27 @@
-private static void crawl(String url, int depth, Set<String> visitedUrls, Path outputDir) {
-        if (depth > MAX_DEPTH) {
-            return;
-        }
+-- Создание таблицы FILE_STATS
+CREATE TABLE FILE_STATS (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    fileName VARCHAR(255) NOT NULL,
+    arrivedAt TIMESTAMP NOT NULL,
+    destinationDir VARCHAR(255) NOT NULL,
+    state VARCHAR(50) NOT NULL
+);
 
-        if (!visitedUrls.add(url)) {
-            return;
-        }
+-- Создание таблицы CATEGORIES
+CREATE TABLE CATEGORIES (
+    file_Id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    fileNameMask VARCHAR(255) NOT NULL,
+    allowedExtensions VARCHAR(255) NOT NULL,
+    allowedSeparators VARCHAR(50) NOT NULL,
+    columnsCount INTEGER NOT NULL,
+    allowedColumns VARCHAR(255) NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    daysToExpire INTEGER NOT NULL,
+    confStartDate TIMESTAMP NOT NULL,
+    confExpirationDate TIMESTAMP NOT NULL,
+    description VARCHAR(500) NOT NULL
+);
 
-        try {
-            Document doc = Jsoup.connect(url).get();
-            System.out.println("Crawling: " + url);
-
-            String textContent = doc.body().text();
-            Path textFilePath = Paths.get(outputDir.toString(), "texts", getFileName(url, ".txt"));
-            Files.write(textFilePath, textContent.getBytes());
-
-            List<Future<?>> futures = saveMediaContent(doc, outputDir);
-            for (Future<?> future : futures) {
-                future.get();
-            }
-
-            List<String> links = getLinks(doc);
-            for (String link : links) {
-                crawl(link, depth + 1, visitedUrls, outputDir);
-            }
-        } catch (IOException | InterruptedException e) {
-            System.err.println("Error crawling " + url + ": " + e.getMessage());
-        }
-    }
-
-    private static List<Future<?>> saveMediaContent(Document doc, Path outputDir) {
-        List<Future<?>> futures = Lists.newArrayList();
-
-        Elements imgElements = doc.select("img");
-        futures.addAll(saveMediaFiles(imgElements, "images", outputDir));
-
-        Elements videoElements = doc.select("video");
-        futures.addAll(saveMediaFiles(videoElements, "videos", outputDir));
-
-        return futures;
-    }
-
-    private static List<Future<?>> saveMediaFiles(Elements elements, String type, Path outputDir) {
-        List<Future<?>> futures = Lists.newArrayList();
-        Path typeDir = Paths.get(outputDir.toString(), type);
-        Files.createDirectories(typeDir);
-
-        for (Element element : elements) {
-            String url = element.attr("src");
-            String fileName = getFileName(url, "." + type);
-            Path filePath = Paths.get(typeDir.toString(), fileName);
-            if (!Files.exists(filePath)) {
-                Future<?> future = executorService.submit(() -> {
-                    try (InputStream in = new URL(url).openStream()) {
-                        Files.copy(in, filePath, StandardCopyOption.REPLACE_EXISTING);
-                        System.out.println("Downloaded " + type + ": " + filePath);
-                    } catch (IOException e) {
-                        System.err.println("Error downloading " + type + ": " + url);
-                    }
-});
-futures.add(future);
-            }
-        }
-        return futures;
-    }
+-- Добавление записи в таблицу FILE_STATS
+INSERT INTO FILE_STATS (fileName, arrivedAt, destinationDir, state)
+VALUES ('db_fileName1_202210010908.csv', CURRENT_TIMESTAMP, '/path/to/destination',
