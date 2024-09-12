@@ -1,57 +1,22 @@
--- Создание схемы
-CREATE SCHEMA IF NOT EXISTS file_management;
-USE file_management;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 
--- Создание таблицы FILE_STATS
-CREATE TABLE IF NOT EXISTS FILE_STATS (
-    id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    fileName VARCHAR(255) NOT NULL,
-    arrivedAt TIMESTAMP NOT NULL,
-    destinationDir VARCHAR(255) NOT NULL,
-    state VARCHAR(50) NOT NULL
-);
+public class CsvHeaderReader {
+    public static void main(String[] args) {
+        String csvFilePath = "path/to/your/file.csv";
 
--- Создание таблицы CATEGORIES
-CREATE TABLE IF NOT EXISTS CATEGORIES (
-    file_Id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    fileNameMask VARCHAR(255) NOT NULL,
-    allowedExtensions VARCHAR(255) NOT NULL,
-    allowedSeparators VARCHAR(50) NOT NULL,
-    columnsCount INTEGER NOT NULL,
-    allowedColumns VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL,
-    daysToExpire INTEGER NOT NULL,
-    confStartDate TIMESTAMP NOT NULL,
-    confExpirationDate TIMESTAMP NOT NULL,
-    description VARCHAR(500) NOT NULL
-);
+        try (Reader reader = new FileReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
+            CSVRecord headerRecord = csvParser.getRecords().get(0);
+            System.out.println("CSV Header: " + headerRecord);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
 
--- Добавление записи в таблицу FILE_STATS
-INSERT INTO FILE_STATS (fileName, arrivedAt, destinationDir, state)
-VALUES ('db_fileName1_202210010908.csv', CURRENT_TIMESTAMP, '/path/to/destination', 'PENDING');
-
--- Добавление записи в таблицу CATEGORIES
-INSERT INTO CATEGORIES (
-    fileNameMask, 
-    allowedExtensions, 
-    allowedSeparators, 
-    columnsCount, 
-    allowedColumns, 
-    status, 
-    daysToExpire, 
-    confStartDate, 
-    confExpirationDate, 
-    description
-)
-VALUES (
-    'db_*.csv', 
-    'csv', 
-    ',', 
-    10, 
-    'col1,col2,col3,col4,col5,col6,col7,col8,col9,col10', 
-    'ACTIVE', 
-    30, 
-    '2022-10-01 00:00:00', 
-    '2022-12-31 23:59:59', 
-    'Category for database files'
-);
+Вот к
