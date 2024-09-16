@@ -1,96 +1,115 @@
-Беседа № 120: 
+Беседа № 121: 
 Выбрана Ваша роль: Программист
 
-Хорошо, вот как вы можете настроить Logback в вашем Gradle-проекте Spring Boot 2.2.4:
+Sure, here's an example of a FileHandler class that uses JDBC to perform the specified SQL operations, with the main method executing three inserts wrapped in a transaction:
 
-1. Добавьте следующие зависимости в ваш build.gradle:
+import java.sql.*;
+import java.time.LocalDate;
 
-dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-web'
-    implementation 'org.springframework.boot:spring-boot-starter-log4j2'
-}
+public class FileHandler {
+    private static final String CREATE_FILE_CATEGORIES_TABLE = "CREATE TABLE FILE_CATEGORIES (...);";
+    private static final String CREATE_FILE_ITERATIONS_TABLE = "CREATE TABLE FILE_ITERATIONS (...);";
+    private static final String INSERT_FILE_CATEGORIES = "INSERT INTO FILE_CATEGORIES (...) VALUES (...);";
+    private static final String INSERT_FILE_ITERATIONS = "INSERT INTO FILE_ITERATIONS (...) VALUES (...);";
+    private static final String UPDATE_FILE_ITERATION = "UPDATE FILE_ITERATIONS SET state = ? WHERE id = ?;";
+    private static final String DELETE_FILE_ITERATION = "DELETE FROM FILE_ITERATIONS WHERE id = ?;";
+    private static final String SELECT_FILE_ITERATIONS = "SELECT * FROM FILE_ITERATIONS WHERE category_id = ?;";
 
-2. Создайте файл logback.xml в src/main/resources со следующим содержимым:
+    private Connection connection;
 
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/application.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>logs/application-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-            <maxFileSize>10MB</maxFileSize>
-            <totalSizeCap>100MB</totalSizeCap>
-            <maxHistory>10</maxHistory>
-        </rollingPolicy>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
-    </root>
-</configuration>
-
-3. Создайте ваш UltimateLogSpammer класс, как в предыдущем ответе:
-
-import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
-
-@Component
-public class UltimateLogSpammer {
-    private static final Logger log = LoggerFactory.getLogger(UltimateLogSpammer.class);
-    private static final long MAX_LOG_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-    private static final long MAX_TOTAL_LOG_SIZE = 100 * 1024 * 1024; // 100 MB
-    private static final int MAX_LOG_FILES = 10;
-    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
-    @Scheduled(fixedRate = 60000) // Выполняется каждую минуту
-    public void spamLogs() {
-        StringBuilder logMessage = new StringBuilder();
-        logMessage.append("Timestamp: ").append(LocalDateTime.now().format(DATETIME_FORMATTER)).append("\n");
-
-        // Создание записи лога размером 1 MB
-        for (int i = 0; i < 100_000; i++) {
-            logMessage.append("This is a very long log message. This is a very long log message. This is a very long log message. This is a very long log message. This is a very long log message.");
-        }
-
-        log.info(logMessage.toString());
-        cleanupLogs();
+    public FileHandler(Connection connection) {
+        this.connection = connection;
     }
 
-    private void cleanupLogs() {
-        Path logsDir = Paths.get("logs");
-        if (!Files.exists(logsDir)) {
-            Files.createDirectory(logsDir);
+    public void createTables() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate(CREATE_FILE_CATEGORIES_TABLE);
+            statement.executeUpdate(CREATE_FILE_ITERATIONS_TABLE);
         }
+    }
 
-        long totalLogSize = 0;
-        int logFileCount = 0;
-        for (File file : logsDir.toFile().listFiles()) {
-            totalLogSize += file.length();
-            logFileCount++;
+    public void insertFileCategory(String status, String description, String database, LocalDate startDate, LocalDate finishDate, int daysToExpire, String separators, int columnsCount, String nameMask, String extensions, String columns) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(INSERT_FILE_CATEGORIES)) {
+            statement.setString(1, status);
+            statement.setString(2, description);
+            statement.setString(3, database);
+            statement.setDate(4, Date.valueOf(startDate));
+            statement.setDate(5, Date.valueOf(finishDate));
+            statement.setInt(6, daysToExpire);
+            statement.setString(7, separators);
+            statement.setInt(8, columnsCount);
+            statement.setString(9, nameMask);
+            statement.setString(10, extensions);
+            statement.setString(11, columns);
+            statement.executeUpdate();
         }
+    }
 
-        if (totalLogSize > MAX_TOTAL_LOG_SIZE || logFileCount > MAX_LOG_FILES) {
-            for (File file : logsDir.toFile().listFiles()) {
-                file.delete();
+    public void insertFileIteration(int categoryId, String name, LocalDate arrivedAt, String state, String destination, long fileSize, long rows, Timestamp processingStart, Timestamp processingEnd, Long archiveSize, String archiveName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(INSERT_FILE_ITERATIONS)) {
+            statement.setInt(1, categoryId);
+            statement.setString(2, name);
+            statement.setDate(3, Date.valueOf(arrivedAt));
+            statement.setString(4, state);
+            statement.setString(5, destination);
+            statement.setLong(6, fileSize);
+            statement.setLong(7, rows);
+            statement.setTimestamp(8, processingStart);
+            statement.setTimestamp(9, processingEnd);
+            statement.setLong(10, archiveSize != null ? archiveSize : 0);
+            statement.setString(11, archiveName);
+            statement.executeUpdate();
+        }
+    }
+
+    public void updateFileIterationState(int id, String state) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(UPDATE_FILE_ITERATION)) {
+            statement.setString(1, state);
+            statement.setInt(2, id);
+            statement.executeUpdate();
+        }
+    }
+
+    public void deleteFileIteration(int id) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(DELETE_FILE_ITERATION)) {
+            statement.setInt(1, id);
+            statement.executeUpdate();
+        }
+    }
+
+    public ResultSet selectFileIterationsByCategory(int categoryId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(SELECT_FILE_ITERATIONS)) {
+            statement.setInt(1, categoryId);
+            return statement.executeQuery();
+        }
+    }
+
+    public static void main(String[] args) {
+        try (Connection connection = DriverManager.getConnection("jdbc:mysql://localhost:3306/your_database", "your_username", "your_password")) {
+            FileHandler fileHandler = new FileHandler(connection);
+
+            connection.setAutoCommit(false);
+            try {
+                fileHandler.createTables();
+                fileHandler.insertFileCategory("Active", "Description 1", "database1", LocalDate.now(), LocalDate.now().plusDays(30), 30, ",|;", 10, "file_name_mask", ".txt", "col1,col2,col3");
+                fileHandler.insertFileIteration(1, "file1.txt", LocalDate.now(), "PENDING", "destination1", 1024, 100, Timestamp.valueOf("2023-04-01 10:00:00"), Timestamp.valueOf("2023-04-01 10:30:00"), 512L, "file1.zip");
+                fileHandler.insertFileIteration(1, "file2.txt", LocalDate.now().minusDays(2), "PROCESSING", "destination2", 2048, 200, Timestamp.valueOf("2023-03-30 08:00:00"), Timestamp.valueOf("2023-03-30 09:00:00"), 1024L, "file2.zip");
+                fileHandler.insertFileIteration(1, "file3.txt", LocalDate.now().minusDays(5), "COMPLETED", "destination3", 4096, 300, Timestamp.valueOf("2023-03-27 14:00:00"), Timestamp.valueOf("2023-03-27 15:00:00"), 2048L, "file3.zip");
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
             }
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
     }
 }
+
+In this example, the FileHandler class has methods for creating the tables, inserting file categories and iterations, updating the state of file iterations, deleting file iterations, and selecting file iterations by category. The main method demonstrates how to use the FileHandler class to perform three inserts within a transaction.
+
+Note that you'll need to replace the database connection details ("jdbc:mysql://localhost:3306/your_database", "your_username", "your_password") with your own credentials.
+
+1654 из 16384
+
+
