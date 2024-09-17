@@ -1,115 +1,40 @@
-Беседа № 121: 
-Выбрана Ваша роль: Программист
+-- Create the ois database
+CREATE DATABASE ois;
 
-Sure, here's an example of a FileHandler class that uses JDBC to perform the specified SQL operations, with the main method executing three inserts wrapped in a transaction:
+-- Create the FILE_ITERATIONS table in the ois database
+USE ois;
+CREATE TABLE FILE_ITERATIONS (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    category_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    arrived_at DATE NOT NULL,
+    state VARCHAR(20) NOT NULL,
+    destination VARCHAR(255) NOT NULL,
+    file_size BIGINT NOT NULL,
+    rows BIGINT NOT NULL,
+    processing_start TIMESTAMP NOT NULL,
+    processing_end TIMESTAMP NOT NULL,
+    archive_size BIGINT,
+    archive_name VARCHAR(255),
+    FOREIGN KEY (category_id) REFERENCES FILE_CATEGORIES(id)
+);
 
-import java.sql.*;
-import java.time.LocalDate;
+-- Create the core database
+CREATE DATABASE core;
 
-public class FileHandler {
-    private static final String CREATE_FILE_CATEGORIES_TABLE = "CREATE TABLE FILE_CATEGORIES (...);";
-    private static final String CREATE_FILE_ITERATIONS_TABLE = "CREATE TABLE FILE_ITERATIONS (...);";
-    private static final String INSERT_FILE_CATEGORIES = "INSERT INTO FILE_CATEGORIES (...) VALUES (...);";
-    private static final String INSERT_FILE_ITERATIONS = "INSERT INTO FILE_ITERATIONS (...) VALUES (...);";
-    private static final String UPDATE_FILE_ITERATION = "UPDATE FILE_ITERATIONS SET state = ? WHERE id = ?;";
-    private static final String DELETE_FILE_ITERATION = "DELETE FROM FILE_ITERATIONS WHERE id = ?;";
-    private static final String SELECT_FILE_ITERATIONS = "SELECT * FROM FILE_ITERATIONS WHERE category_id = ?;";
-
-    private Connection connection;
-
-    public FileHandler(Connection connection) {
-        this.connection = connection;
-    }
-
-    public void createTables() throws SQLException {
-        try (Statement statement = connection.createStatement()) {
-            statement.executeUpdate(CREATE_FILE_CATEGORIES_TABLE);
-            statement.executeUpdate(CREATE_FILE_ITERATIONS_TABLE);
-        }
-    }
-
-    public void insertFileCategory(String status, String description, String database, LocalDate startDate, LocalDate finishDate, int daysToExpire, String separators, int columnsCount, String nameMask, String extensions, String columns) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(INSERT_FILE_CATEGORIES)) {
-            statement.setString(1, status);
-            statement.setString(2, description);
-            statement.setString(3, database);
-            statement.setDate(4, Date.valueOf(startDate));
-            statement.setDate(5, Date.valueOf(finishDate));
-            statement.setInt(6, daysToExpire);
-            statement.setString(7, separators);
-            statement.setInt(8, columnsCount);
-            statement.setString(9, nameMask);
-            statement.setString(10, extensions);
-            statement.setString(11, columns);
-            statement.executeUpdate();
-        }
-    }
-
-    public void insertFileIteration(int categoryId, String name, LocalDate arrivedAt, String state, String destination, long fileSize, long rows, Timestamp processingStart, Timestamp processingEnd, Long archiveSize, String archiveName) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(INSERT_FILE_ITERATIONS)) {
-            statement.setInt(1, categoryId);
-            statement.setString(2, name);
-            statement.setDate(3, Date.valueOf(arrivedAt));
-            statement.setString(4, state);
-            statement.setString(5, destination);
-            statement.setLong(6, fileSize);
-            statement.setLong(7, rows);
-            statement.setTimestamp(8, processingStart);
-            statement.setTimestamp(9, processingEnd);
-            statement.setLong(10, archiveSize != null ? archiveSize : 0);
-            statement.setString(11, archiveName);
-            statement.executeUpdate();
-        }
-    }
-
-    public void updateFileIterationState(int id, String state) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(UPDATE_FILE_ITERATION)) {
-            statement.setString(1, state);
-            statement.setInt(2, id);
-            statement.executeUpdate();
-        }
-    }
-
-    public void deleteFileIteration(int id) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(DELETE_FILE_ITERATION)) {
-            statement.setInt(1, id);
-            statement.executeUpdate();
-        }
-    }
-
-    public ResultSet selectFileIterationsByCategory(int categoryId) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(SELECT_FILE_ITERATIONS)) {
-            statement.setInt(1, categoryId);
-            return statement.executeQuery();
-        }
-    }
-
-    public static void main(String[] args) {
-        try (Connection connection = DriverManager.getConnection("jdbc:mysql://localhost:3306/your_database", "your_username", "your_password")) {
-            FileHandler fileHandler = new FileHandler(connection);
-
-            connection.setAutoCommit(false);
-            try {
-                fileHandler.createTables();
-                fileHandler.insertFileCategory("Active", "Description 1", "database1", LocalDate.now(), LocalDate.now().plusDays(30), 30, ",|;", 10, "file_name_mask", ".txt", "col1,col2,col3");
-                fileHandler.insertFileIteration(1, "file1.txt", LocalDate.now(), "PENDING", "destination1", 1024, 100, Timestamp.valueOf("2023-04-01 10:00:00"), Timestamp.valueOf("2023-04-01 10:30:00"), 512L, "file1.zip");
-                fileHandler.insertFileIteration(1, "file2.txt", LocalDate.now().minusDays(2), "PROCESSING", "destination2", 2048, 200, Timestamp.valueOf("2023-03-30 08:00:00"), Timestamp.valueOf("2023-03-30 09:00:00"), 1024L, "file2.zip");
-                fileHandler.insertFileIteration(1, "file3.txt", LocalDate.now().minusDays(5), "COMPLETED", "destination3", 4096, 300, Timestamp.valueOf("2023-03-27 14:00:00"), Timestamp.valueOf("2023-03-27 15:00:00"), 2048L, "file3.zip");
-                connection.commit();
-            } catch (SQLException e) {
-                connection.rollback();
-                throw e;
-            }
-        } catch (SQLException e) {
-            e.printStackTrace();
-        }
-    }
-}
-
-In this example, the FileHandler class has methods for creating the tables, inserting file categories and iterations, updating the state of file iterations, deleting file iterations, and selecting file iterations by category. The main method demonstrates how to use the FileHandler class to perform three inserts within a transaction.
-
-Note that you'll need to replace the database connection details ("jdbc:mysql://localhost:3306/your_database", "your_username", "your_password") with your own credentials.
-
-1654 из 16384
-
-
+-- Create the FILE_ITERATIONS table in the core database
+USE core;
+CREATE TABLE FILE_ITERATIONS (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    category_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    arrived_at DATE NOT NULL,
+    state VARCHAR(20) NOT NULL,
+    destination VARCHAR(255) NOT NULL,
+    file_size BIGINT NOT NULL,
+    rows BIGINT NOT NULL,
+    processing_start TIMESTAMP NOT NULL,
+    processing_end TIMESTAMP NOT NULL,
+    archive_size BIGINT,
+    archive_name VARCHAR(255),
+    FOREIGN KEY (category_id) REFERENCES FILE_CATEGORIES(id)
