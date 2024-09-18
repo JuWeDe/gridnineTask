@@ -1,9 +1,4 @@
-Беседа № 121: 
-Выбрана Ваша роль: Программист
 
-Понятно, в таком случае я предлагаю использовать решение с помощью системных свойств (System Properties) и наблюдателей (Observers).
-
-Вот пример реализации:
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -11,6 +6,7 @@ import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ConfigManager {
     private static final String CONFIG_FILE = "config.properties";
@@ -18,23 +14,26 @@ public class ConfigManager {
 
     private static Properties config = new Properties();
     private static ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
-
-    private static ConfigurationChangeListener listener;
+    private static AtomicInteger changeCounter = new AtomicInteger(0);
 
     public static void main(String[] args) {
         // Установка начальных значений конфигурации
-        loadConfig();
+        загрузитьКонфигурацию();
 
-        // Регистрация слушателя изменений конфигурации
-        setConfigurationChangeListener(newConfig -> {
-            System.out.println("Configuration changed:");
-            for (String key : newConfig.stringPropertyNames()) {
-                System.out.println(key + ": " + newConfig.getProperty(key));
-            }
-        });
+        // Вывод начальных значений конфигурации
+        System.out.println("Начальная конфигурация:");
+        for (String key : config.stringPropertyNames()) {
+            System.out.println(key + ": " + config.getProperty(key));
+        }
 
         // Периодическое обновление конфигурации
-        executorService.scheduleAtFixedRate(() -> loadConfig(), RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        executorService.scheduleAtFixedRate(() -> {
+            загрузитьКонфигурацию();
+            int changes = проверитьИзмененияКонфигурации();
+            if (changes > 0) {
+                System.out.println("Конфигурация изменена " + changes + " раз(а).");
+            }
+        }, RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
         // Имитация работы приложения
         while (true) {
@@ -46,48 +45,41 @@ public class ConfigManager {
         }
     }
 
-    public static void loadConfig() {
+    public static void загрузитьКонфигурацию() {
+        try (FileInputStream fis = new FileInputStream(CONFIG_FILE)) {
+            Properties newConfig = new Properties();
+            newConfig.load(fis);
+            config = newConfig;
+        } catch (IOException e) {
+            System.err.println("Ошибка загрузки конфигурации: " + e.getMessage());
+        }
+    }
+
+    private static int проверитьИзмененияКонфигурации() {
         try (FileInputStream fis = new FileInputStream(CONFIG_FILE)) {
             Properties newConfig = new Properties();
             newConfig.load(fis);
 
             if (!newConfig.equals(config)) {
-                Properties oldConfig = config;
+                int changes = changeCounter.incrementAndGet();
+                System.out.println("Конфигурация изменена. Новое значение для ключа: " + newConfig.stringPropertyNames().iterator().next() + " = " + newConfig.getProperty(newConfig.stringPropertyNames().iterator().next()));
                 config = newConfig;
-                fireConfigurationChanged(oldConfig, newConfig);
+                return changes;
             }
         } catch (IOException e) {
-            System.err.println("Error loading configuration: " + e.getMessage());
+            System.err.println("Ошибка проверки конфигурации: " + e.getMessage());
         }
-    }
-
-    public static void setConfigurationChangeListener(ConfigurationChangeListener listener) {
-        ConfigManager.listener = listener;
-    }
-
-    private static void fireConfigurationChanged(Properties oldConfig, Properties newConfig) {
-        if (listener != null) {
-            listener.onConfigurationChanged(newConfig);
-        }
-    }
-
-    @FunctionalInterface
-    public interface ConfigurationChangeListener {
-        void onConfigurationChanged(Properties newConfig);
+        return 0;
     }
 }
 
-В этом примере:
+В этом решении мы сделали следующее:
 
-1. Используется файл config.properties для хранения конфигурационных данных.
-2. Метод loadConfig() загружает конфигурацию из файла и обновляет переменную config.
-3. Если конфигурация изменилась, метод fireConfigurationChanged() вызывает зарегистрированного слушателя с новой конфигурацией.
-4. В main() методе мы регистрируем слушателя изменений конфигурации и запускаем периодическое обновление конфигурации каждые 5 секунд.
+1. Использовали AtomicInteger для отслеживания количества изменений конфигурации.
+2. В методе main() мы сразу после загрузки конфигурации выводим ее начальные значения.
+3. В методе загрузитьКонфигурацию() мы просто присваиваем новую конфигурацию переменной config, без сравнения с предыдущей.
+4. Мы добавили метод проверитьИзмененияКонфигурации(), который отвечает за проверку изменений конфигурации, и, если они произошли, выводит количество изменений и новое значение.
 
-Это решение является достаточно гибким и масштабируемым, поскольку:
+Теперь, когда вы запустите это приложение, оно будет каждые 5 секунд проверять файл config.properties на изменения и выводить соответствующие сообщения в консоль. Приложение будет работать постоянно, пока вы его не остановите.
 
-1. Использование системных свойств позволяет легко переопределять конфигурационные данные при запуске приложения.
-2. Наблюдатели (Observers) обеспечивают гибкий механизм для уведомления приложения об изменениях в конфигурации.
-3. Периодическое обновление конфигурации позволяет приложению автоматически реагировать на изменения, без необходимости перезапуска.
-
-Это профессиональное решение, так как оно:
+Вы можете изменить значение параметра в файле config.properties, например:
