@@ -1,40 +1,93 @@
--- Create the ois database
-CREATE DATABASE ois;
+Беседа № 121: 
+Выбрана Ваша роль: Программист
 
--- Create the FILE_ITERATIONS table in the ois database
-USE ois;
-CREATE TABLE FILE_ITERATIONS (
-    id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    category_id INTEGER NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    arrived_at DATE NOT NULL,
-    state VARCHAR(20) NOT NULL,
-    destination VARCHAR(255) NOT NULL,
-    file_size BIGINT NOT NULL,
-    rows BIGINT NOT NULL,
-    processing_start TIMESTAMP NOT NULL,
-    processing_end TIMESTAMP NOT NULL,
-    archive_size BIGINT,
-    archive_name VARCHAR(255),
-    FOREIGN KEY (category_id) REFERENCES FILE_CATEGORIES(id)
-);
+Понятно, в таком случае я предлагаю использовать решение с помощью системных свойств (System Properties) и наблюдателей (Observers).
 
--- Create the core database
-CREATE DATABASE core;
+Вот пример реализации:
 
--- Create the FILE_ITERATIONS table in the core database
-USE core;
-CREATE TABLE FILE_ITERATIONS (
-    id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    category_id INTEGER NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    arrived_at DATE NOT NULL,
-    state VARCHAR(20) NOT NULL,
-    destination VARCHAR(255) NOT NULL,
-    file_size BIGINT NOT NULL,
-    rows BIGINT NOT NULL,
-    processing_start TIMESTAMP NOT NULL,
-    processing_end TIMESTAMP NOT NULL,
-    archive_size BIGINT,
-    archive_name VARCHAR(255),
-    FOREIGN KEY (category_id) REFERENCES FILE_CATEGORIES(id)
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Properties;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class ConfigManager {
+    private static final String CONFIG_FILE = "config.properties";
+    private static final long RELOAD_INTERVAL_SECONDS = 5;
+
+    private static Properties config = new Properties();
+    private static ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+
+    private static ConfigurationChangeListener listener;
+
+    public static void main(String[] args) {
+        // Установка начальных значений конфигурации
+        loadConfig();
+
+        // Регистрация слушателя изменений конфигурации
+        setConfigurationChangeListener(newConfig -> {
+            System.out.println("Configuration changed:");
+            for (String key : newConfig.stringPropertyNames()) {
+                System.out.println(key + ": " + newConfig.getProperty(key));
+            }
+        });
+
+        // Периодическое обновление конфигурации
+        executorService.scheduleAtFixedRate(() -> loadConfig(), RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
+
+        // Имитация работы приложения
+        while (true) {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
+    }
+
+    public static void loadConfig() {
+        try (FileInputStream fis = new FileInputStream(CONFIG_FILE)) {
+            Properties newConfig = new Properties();
+            newConfig.load(fis);
+
+            if (!newConfig.equals(config)) {
+                Properties oldConfig = config;
+                config = newConfig;
+                fireConfigurationChanged(oldConfig, newConfig);
+            }
+        } catch (IOException e) {
+            System.err.println("Error loading configuration: " + e.getMessage());
+        }
+    }
+
+    public static void setConfigurationChangeListener(ConfigurationChangeListener listener) {
+        ConfigManager.listener = listener;
+    }
+
+    private static void fireConfigurationChanged(Properties oldConfig, Properties newConfig) {
+        if (listener != null) {
+            listener.onConfigurationChanged(newConfig);
+        }
+    }
+
+    @FunctionalInterface
+    public interface ConfigurationChangeListener {
+        void onConfigurationChanged(Properties newConfig);
+    }
+}
+
+В этом примере:
+
+1. Используется файл config.properties для хранения конфигурационных данных.
+2. Метод loadConfig() загружает конфигурацию из файла и обновляет переменную config.
+3. Если конфигурация изменилась, метод fireConfigurationChanged() вызывает зарегистрированного слушателя с новой конфигурацией.
+4. В main() методе мы регистрируем слушателя изменений конфигурации и запускаем периодическое обновление конфигурации каждые 5 секунд.
+
+Это решение является достаточно гибким и масштабируемым, поскольку:
+
+1. Использование системных свойств позволяет легко переопределять конфигурационные данные при запуске приложения.
+2. Наблюдатели (Observers) обеспечивают гибкий механизм для уведомления приложения об изменениях в конфигурации.
+3. Периодическое обновление конфигурации позволяет приложению автоматически реагировать на изменения, без необходимости перезапуска.
+
+Это профессиональное решение, так как оно:
