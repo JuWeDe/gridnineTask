@@ -1,3 +1,7 @@
+Беседа № 126: 
+Выбрана Ваша роль: Программист
+
+Хорошо, вот измененная версия класса FolderCleaner, которая удаляет файлы через 10 секунд после их появления:
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -5,21 +9,24 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class FolderCleaner {
     private final Path watchedDirectory;
-    private final int expirationDays;
-    private final WatchService watchService;
-    private final Map<WatchKey, Path> keyToPathMap;
+    private final ScheduledExecutorService scheduledExecutorService;
+    private final Map<Path, LocalDateTime> fileCreationTimes;
+    private final int expirationSeconds;
 
-    public FolderCleaner(String directoryPath, int expirationDays) throws IOException {
+    public FolderCleaner(String directoryPath, int expirationSeconds) throws IOException {
         this.watchedDirectory = Paths.get(directoryPath);
-        this.expirationDays = expirationDays;
-        this.watchService = FileSystems.getDefault().newWatchService();
-        this.keyToPathMap = new HashMap<>();
+        this.expirationSeconds = expirationSeconds;
+        this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+        this.fileCreationTimes = new HashMap<>();
 
         // Регистрируем наблюдение за директорией
-        watchedDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
+        watchedDirectory.register(FileSystems.getDefault().newWatchService(), StandardWatchEventKinds.ENTRY_CREATE,
                 StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
     }
 
@@ -29,7 +36,7 @@ public class FolderCleaner {
                 // Ожидание изменений в директории
                 WatchKey key;
                 try {
-                    key = watchService.take();
+                    key = FileSystems.getDefault().newWatchService().take();
                 } catch (InterruptedException e) {
                     return;
                 }
@@ -37,14 +44,15 @@ public class FolderCleaner {
                 // Обработка изменений
                 for (WatchEvent<?> event : key.pollEvents()) {
                     WatchEvent.Kind<?> kind = event.kind();
-                    Path path = keyToPathMap.get(key).resolve((Path) event.context());
+                    Path path = watchedDirectory.resolve((Path) event.context());
 
                     if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
                         // Новый файл создан
-                        keyToPathMap.put(key, path);
+                        fileCreationTimes.put(path, LocalDateTime.now());
+                        scheduleFileExpiration(path);
                     } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
                         // Файл удален
-                        keyToPathMap.remove(key);
+                        fileCreationTimes.remove(path);
                     } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
                         // Файл изменен
                         // Можно реализовать какие-либо действия, например, обновить метку времени
@@ -53,38 +61,39 @@ public class FolderCleaner {
                     }
                 }
 
-                // Проверяем файлы на истечение срока годности
-                checkExpiration();
-
                 // Сбрасываем ключ для дальнейшего использования
                 boolean valid = key.reset();
                 if (!valid) {
-                    keyToPathMap.remove(key);
-                    if (keyToPathMap.isEmpty()) {
-                        break;
-                    }
+                    break;
                 }
             }
         }).start();
     }
 
-    private void checkExpiration() {
-        for (Path path : keyToPathMap.values()) {
-            LocalDateTime createdAt = Files.getLastModifiedTime(path).toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
-            long daysSinceCreation = ChronoUnit.DAYS.between(createdAt, LocalDateTime.now());
-            if (daysSinceCreation > expirationDays) {
-                try {
-                    Files.delete(path);
-                    System.out.println("Deleted file: " + path.getFileName());
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+    private void scheduleFileExpiration(Path path) {
+        scheduledExecutorService.schedule(() -> {
+            try {
+                Files.delete(path);
+                System.out.println("Deleted file: " + path.getFileName());
+                fileCreationTimes.remove(path);
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-        }
+        }, expirationSeconds, TimeUnit.SECONDS);
     }
 }
 
-Вот как можно использовать этот класс:
+Основные изменения:
 
-FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 30);
+1. Добавлен ScheduledExecutorService для планирования удаления файлов.
+2. Вместо метода checkExpiration() используется scheduleFileExpiration(), который планирует удаление файла через expirationSeconds секунд после его создания.
+3. Вместо отслеживания времени создания файла, теперь используется fileCreationTimes для хранения времени создания каждого файла.
+
+Теперь, чтобы использовать этот класс, вы можете сделать следующее:
+
+FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 10);
 folderCleaner.start();
+
+В этом примере FolderCleaner будет наблюдать за директорией "path/to/directory" и удалять файлы через 10 секунд после их появления.
+
+2088 из 16384
