@@ -1,85 +1,90 @@
 
-
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.Properties;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.file.*;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
+import java.util.Map;
 
-public class ConfigManager {
-    private static final String CONFIG_FILE = "config.properties";
-    private static final long RELOAD_INTERVAL_SECONDS = 5;
+public class FolderCleaner {
+    private final Path watchedDirectory;
+    private final int expirationDays;
+    private final WatchService watchService;
+    private final Map<WatchKey, Path> keyToPathMap;
 
-    private static Properties config = new Properties();
-    private static ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
-    private static AtomicInteger changeCounter = new AtomicInteger(0);
+    public FolderCleaner(String directoryPath, int expirationDays) throws IOException {
+        this.watchedDirectory = Paths.get(directoryPath);
+        this.expirationDays = expirationDays;
+        this.watchService = FileSystems.getDefault().newWatchService();
+        this.keyToPathMap = new HashMap<>();
 
-    public static void main(String[] args) {
-        // Установка начальных значений конфигурации
-        загрузитьКонфигурацию();
-
-        // Вывод начальных значений конфигурации
-        System.out.println("Начальная конфигурация:");
-        for (String key : config.stringPropertyNames()) {
-            System.out.println(key + ": " + config.getProperty(key));
-        }
-
-        // Периодическое обновление конфигурации
-        executorService.scheduleAtFixedRate(() -> {
-            загрузитьКонфигурацию();
-            int changes = проверитьИзмененияКонфигурации();
-            if (changes > 0) {
-                System.out.println("Конфигурация изменена " + changes + " раз(а).");
-            }
-        }, RELOAD_INTERVAL_SECONDS, RELOAD_INTERVAL_SECONDS, TimeUnit.SECONDS);
-
-        // Имитация работы приложения
-        while (true) {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                break;
-            }
-        }
+        // Регистрируем наблюдение за директорией
+        watchedDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
+                StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
     }
 
-    public static void загрузитьКонфигурацию() {
-        try (FileInputStream fis = new FileInputStream(CONFIG_FILE)) {
-            Properties newConfig = new Properties();
-            newConfig.load(fis);
-            config = newConfig;
-        } catch (IOException e) {
-            System.err.println("Ошибка загрузки конфигурации: " + e.getMessage());
-        }
+    public void start() {
+        new Thread(() -> {
+            while (true) {
+                // Ожидание изменений в директории
+                WatchKey key;
+                try {
+                    key = watchService.take();
+                } catch (InterruptedException e) {
+                    return;
+                }
+
+                // Обработка изменений
+                for (WatchEvent<?> event : key.pollEvents()) {
+                    WatchEvent.Kind<?> kind = event.kind();
+                    Path path = keyToPathMap.get(key).resolve((Path) event.context());
+
+                    if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+                        // Новый файл создан
+                        keyToPathMap.put(key, path);
+                    } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+                        // Файл удален
+                        keyToPathMap.remove(key);
+                    } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+                        // Файл изменен
+                        // Можно реализовать какие-либо действия, например, обновить метку времени
+                    } else if (kind == StandardWatchEventKinds.OVERFLOW) {
+                        // Пропущено событие, ничего не делаем
+                    }
+                }
+
+                // Проверяем файлы на истечение срока годности
+                checkExpiration();
+
+                // Сбрасываем ключ для дальнейшего использования
+                boolean valid = key.reset();
+                if (!valid) {
+                    keyToPathMap.remove(key);
+                    if (keyToPathMap.isEmpty()) {
+                        break;
+                    }
+                }
+            }
+        }).start();
     }
 
-    private static int проверитьИзмененияКонфигурации() {
-        try (FileInputStream fis = new FileInputStream(CONFIG_FILE)) {
-            Properties newConfig = new Properties();
-            newConfig.load(fis);
-
-            if (!newConfig.equals(config)) {
-                int changes = changeCounter.incrementAndGet();
-                System.out.println("Конфигурация изменена. Новое значение для ключа: " + newConfig.stringPropertyNames().iterator().next() + " = " + newConfig.getProperty(newConfig.stringPropertyNames().iterator().next()));
-                config = newConfig;
-                return changes;
+    private void checkExpiration() {
+        for (Path path : keyToPathMap.values()) {
+            LocalDateTime createdAt = Files.getLastModifiedTime(path).toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+            long daysSinceCreation = ChronoUnit.DAYS.between(createdAt, LocalDateTime.now());
+            if (daysSinceCreation > expirationDays) {
+                try {
+                    Files.delete(path);
+                    System.out.println("Deleted file: " + path.getFileName());
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
-        } catch (IOException e) {
-            System.err.println("Ошибка проверки конфигурации: " + e.getMessage());
         }
-        return 0;
     }
 }
 
-В этом решении мы сделали следующее:
+Вот как можно использовать этот класс:
 
-1. Использовали AtomicInteger для отслеживания количества изменений конфигурации.
-2. В методе main() мы сразу после загрузки конфигурации выводим ее начальные значения.
-3. В методе загрузитьКонфигурацию() мы просто присваиваем новую конфигурацию переменной config, без сравнения с предыдущей.
-4. Мы добавили метод проверитьИзмененияКонфигурации(), который отвечает за проверку изменений конфигурации, и, если они произошли, выводит количество изменений и новое значение.
-
-Теперь, когда вы запустите это приложение, оно будет каждые 5 секунд проверять файл config.properties на изменения и выводить соответствующие сообщения в консоль. Приложение будет работать постоянно, пока вы его не остановите.
-
-Вы можете изменить значение параметра в файле config.properties, например:
+FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 30);
+folderCleaner.start();
