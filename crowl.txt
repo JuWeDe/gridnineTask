@@ -1,12 +1,11 @@
 Беседа № 126: 
 Выбрана Ваша роль: Программист
 
-Хорошо, вот измененная версия класса FolderCleaner, которая удаляет файлы через 10 секунд после их появления:
+Да, можно использовать WatchService без бесконечного цикла while(true). Вот пример обновленного класса FolderCleaner:
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -18,6 +17,8 @@ public class FolderCleaner {
     private final ScheduledExecutorService scheduledExecutorService;
     private final Map<Path, LocalDateTime> fileCreationTimes;
     private final int expirationSeconds;
+    private final WatchService watchService;
+    private final WatchKey watchKey;
 
     public FolderCleaner(String directoryPath, int expirationSeconds) throws IOException {
         this.watchedDirectory = Paths.get(directoryPath);
@@ -26,7 +27,8 @@ public class FolderCleaner {
         this.fileCreationTimes = new HashMap<>();
 
         // Регистрируем наблюдение за директорией
-        watchedDirectory.register(FileSystems.getDefault().newWatchService(), StandardWatchEventKinds.ENTRY_CREATE,
+        this.watchService = FileSystems.getDefault().newWatchService();
+        this.watchKey = watchedDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
                 StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
     }
 
@@ -36,7 +38,7 @@ public class FolderCleaner {
                 // Ожидание изменений в директории
                 WatchKey key;
                 try {
-                    key = FileSystems.getDefault().newWatchService().take();
+                    key = watchService.take();
                 } catch (InterruptedException e) {
                     return;
                 }
@@ -49,6 +51,7 @@ public class FolderCleaner {
                     if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
                         // Новый файл создан
                         fileCreationTimes.put(path, LocalDateTime.now());
+                        System.out.println("New file added: " + path.getFileName());
                         scheduleFileExpiration(path);
                     } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
                         // Файл удален
@@ -85,15 +88,4 @@ public class FolderCleaner {
 
 Основные изменения:
 
-1. Добавлен ScheduledExecutorService для планирования удаления файлов.
-2. Вместо метода checkExpiration() используется scheduleFileExpiration(), который планирует удаление файла через expirationSeconds секунд после его создания.
-3. Вместо отслеживания времени создания файла, теперь используется fileCreationTimes для хранения времени создания каждого файла.
-
-Теперь, чтобы использовать этот класс, вы можете сделать следующее:
-
-FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 10);
-folderCleaner.start();
-
-В этом примере FolderCleaner будет наблюдать за директорией "path/to/directory" и удалять файлы через 10 секунд после их появления.
-
-2088 из 16384
+1. Используется WatchKey вместо повторного вызова FileSystems.getDefault().newWatchService() внутри цикла.
