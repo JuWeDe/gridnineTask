@@ -1,7 +1,7 @@
 Беседа № 126: 
 Выбрана Ваша роль: Программист
 
-Да, можно использовать WatchService без бесконечного цикла while(true). Вот пример обновленного класса FolderCleaner:
+Отлично, вот версия класса FolderCleaner без использования while(true):
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -33,44 +33,44 @@ public class FolderCleaner {
     }
 
     public void start() {
-        new Thread(() -> {
-            while (true) {
-                // Ожидание изменений в директории
-                WatchKey key;
-                try {
-                    key = watchService.take();
-                } catch (InterruptedException e) {
-                    return;
-                }
+        processWatchEvents();
+    }
 
-                // Обработка изменений
-                for (WatchEvent<?> event : key.pollEvents()) {
-                    WatchEvent.Kind<?> kind = event.kind();
-                    Path path = watchedDirectory.resolve((Path) event.context());
+    private void processWatchEvents() {
+        // Ожидание изменений в директории
+        WatchKey key;
+        try {
+            key = watchService.take();
+        } catch (InterruptedException e) {
+            return;
+        }
 
-                    if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                        // Новый файл создан
-                        fileCreationTimes.put(path, LocalDateTime.now());
-                        System.out.println("New file added: " + path.getFileName());
-                        scheduleFileExpiration(path);
-                    } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-                        // Файл удален
-                        fileCreationTimes.remove(path);
-                    } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-                        // Файл изменен
-                        // Можно реализовать какие-либо действия, например, обновить метку времени
-                    } else if (kind == StandardWatchEventKinds.OVERFLOW) {
-                        // Пропущено событие, ничего не делаем
-                    }
-                }
+        // Обработка изменений
+        for (WatchEvent<?> event : key.pollEvents()) {
+            WatchEvent.Kind<?> kind = event.kind();
+            Path path = watchedDirectory.resolve((Path) event.context());
 
-                // Сбрасываем ключ для дальнейшего использования
-                boolean valid = key.reset();
-                if (!valid) {
-                    break;
-                }
+            if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+                // Новый файл создан
+                fileCreationTimes.put(path, LocalDateTime.now());
+                System.out.println("New file added: " + path.getFileName());
+                scheduleFileExpiration(path);
+            } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+                // Файл удален
+                fileCreationTimes.remove(path);
+            } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+                // Файл изменен
+                // Можно реализовать какие-либо действия, например, обновить метку времени
+            } else if (kind == StandardWatchEventKinds.OVERFLOW) {
+                // Пропущено событие, ничего не делаем
             }
-        }).start();
+        }
+
+        // Сбрасываем ключ для дальнейшего использования
+        boolean valid = key.reset();
+        if (valid) {
+            processWatchEvents();
+        }
     }
 
     private void scheduleFileExpiration(Path path) {
@@ -88,4 +88,10 @@ public class FolderCleaner {
 
 Основные изменения:
 
-1. Используется WatchKey вместо повторного вызова FileSystems.getDefault().newWatchService() внутри цикла.
+1. Вызов processWatchEvents() вместо бесконечного цикла while(true).
+2. Рекурсивный вызов processWatchEvents() после обработки событий.
+
+Теперь, чтобы использовать этот класс, вы можете сделать следующее:
+
+FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 10);
+folderCleaner.start();
