@@ -1,97 +1,52 @@
 Беседа № 126: 
 Выбрана Ваша роль: Программист
 
-Отлично, вот версия класса FolderCleaner без использования while(true):
+Чтобы настроить Logback на создание отдельного лог-файла для каждого дня, можно использовать следующую конфигурацию:
 
-import java.io.IOException;
-import java.nio.file.*;
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/app.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/app_%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
 
-public class FolderCleaner {
-    private final Path watchedDirectory;
-    private final ScheduledExecutorService scheduledExecutorService;
-    private final Map<Path, LocalDateTime> fileCreationTimes;
-    private final int expirationSeconds;
-    private final WatchService watchService;
-    private final WatchKey watchKey;
+    <root level="info">
+        <appender-ref ref="FILE" />
+    </root>
+</configuration>
 
-    public FolderCleaner(String directoryPath, int expirationSeconds) throws IOException {
-        this.watchedDirectory = Paths.get(directoryPath);
-        this.expirationSeconds = expirationSeconds;
-        this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
-        this.fileCreationTimes = new HashMap<>();
+Рассмотрим основные элементы этой конфигурации:
 
-        // Регистрируем наблюдение за директорией
-        this.watchService = FileSystems.getDefault().newWatchService();
-        this.watchKey = watchedDirectory.register(watchService, StandardWatchEventKinds.ENTRY_CREATE,
-                StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
-    }
+1. <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">: Определяет файловый аппендер, который будет управлять выводом логов в файл.
+2. <file>logs/app.log</file>: Задает базовое имя файла, в данном случае "app.log".
+3. <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">: Определяет политику ротации файлов на основе времени.
+4. <fileNamePattern>logs/app_%d{yyyy-MM-dd}.log</fileNamePattern>: Устанавливает шаблон для имени файлов. В данном случае, файлы будут иметь имя "app_YYYY-MM-DD.log", где YYYY-MM-DD - дата создания файла.
+5. <maxHistory>30</maxHistory>: Задает максимальное количество дней, в течение которых сохраняются старые лог-файлы (30 дней в данном примере).
+6. <encoder>: Определяет формат вывода логов внутри файлов.
 
-    public void start() {
-        processWatchEvents();
-    }
+Когда приложение запускается с этой конфигурацией, Logback будет автоматически создавать новый лог-файл каждый день, сохраняя предыдущие файлы в течение 30 дней.
 
-    private void processWatchEvents() {
-        // Ожидание изменений в директории
-        WatchKey key;
-        try {
-            key = watchService.take();
-        } catch (InterruptedException e) {
-            return;
-        }
+Например, 1 января будет создан файл "app_2023-01-01.log", 2 января - "app_2023-01-02.log" и так далее. Старые файлы будут удаляться по мере достижения 30-дневного лимита.
 
-        // Обработка изменений
-        for (WatchEvent<?> event : key.pollEvents()) {
-            WatchEvent.Kind<?> kind = event.kind();
-            Path path = watchedDirectory.resolve((Path) event.context());
+Этот подход позволяет поддерживать упорядоченные и компактные лог-файлы, облегчая их анализ и управление.
 
-            if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                // Новый файл создан
-                fileCreationTimes.put(path, LocalDateTime.now());
-                System.out.println("New file added: " + path.getFileName());
-                scheduleFileExpiration(path);
-            } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-                // Файл удален
-                fileCreationTimes.remove(path);
-            } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-                // Файл изменен
-                // Можно реализовать какие-либо действия, например, обновить метку времени
-            } else if (kind == StandardWatchEventKinds.OVERFLOW) {
-                // Пропущено событие, ничего не делаем
-            }
-        }
-
-        // Сбрасываем ключ для дальнейшего использования
-        boolean valid = key.reset();
-        if (valid) {
-            processWatchEvents();
-        }
-    }
-
-    private void scheduleFileExpiration(Path path) {
-        scheduledExecutorService.schedule(() -> {
-            try {
-                Files.delete(path);
-                System.out.println("Deleted file: " + path.getFileName());
-                fileCreationTimes.remove(path);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }, expirationSeconds, TimeUnit.SECONDS);
-    }
-}
-
-Основные изменения:
-
-1. Вызов processWatchEvents() вместо бесконечного цикла while(true).
-2. Рекурсивный вызов processWatchEvents() после обработки событий.
-
-Теперь, чтобы использовать этот класс, вы можете сделать следующее:
-
-FolderCleaner folderCleaner = new FolderCleaner("path/to/directory", 10);
-folderCleaner.start();
+1. %d - дата и время события. Может иметь дополнительные параметры для форматирования даты и времени, например, %d{yyyy-MM-dd HH:mm:ss.SSS}.
+2. %t - имя потока, в котором произошло событие.
+3. %p - уровень приоритета события (TRACE, DEBUG, INFO, WARN, ERROR, FATAL).
+4. %c - название логгера, которому принадлежит событие. Может использоваться для группирования событий по категориям.
+5. %C - название класса, в котором произошло событие.
+6. %M - название метода, в котором произошло событие.
+7. %L - номер строки кода, в которой произошло событие.
+8. %m - само сообщение, которое было записано в лог.
+9. %n - символ новой строки (платформозависимый).
+10. %F - название файла, в котором произошло событие.
+11. %X{key} - значение контекстной переменной с ключом "key".
+12. %X - вывод всех контекстных переменных.
+13. %caller{depth} - информация о вызывающем методе, с указанием глубины стека (depth).
+14. %marker - вывод маркеров, связанных с событием.
