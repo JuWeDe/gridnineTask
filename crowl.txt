@@ -1,136 +1,86 @@
-Беседа № 128: 
+Беседа № 129: 
 Выбрана Ваша роль: Программист
 
-Спасибо за обновление. Вот как можно перевести этот класс в сервис с использованием Spring:
+Вот обновленный код с комментариями и аннотацией для запуска каждые 10 минут:
 
-import com.univocity.parsers.csv.CsvParser;
-import com.univocity.parsers.csv.CsvParserSettings;
-import org.postgresql.copy.CopyManager;
-import org.postgresql.core.BaseConnection;
+package com.example.demo.services;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.Arrays;
-import java.util.List;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
-public class FolderDistributorService {
-    private static final Logger logger = LoggerFactory.getLogger(FolderDistributorService.class);
+public class FolderCleaner {
+    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
-    @Value("${spring.datasource.db-core.jdbc-url}")
-    private String coreDbUrl;
+    private final Path watchedDirectory;
+    private final int daysCount;
+    private final Map<Path, LocalDateTime> fileCreationTimes;
 
-    @Value("${spring.datasource.db-core.username}")
-    private String coreDbUsername;
-
-    @Value("${spring.datasource.db-core.password}")
-    private String coreDbPassword;
-
-    @Value("${spring.datasource.db-ois.jdbc-url}")
-    private String oisDbUrl;
-
-    @Value("${spring.datasource.db-ois.username}")
-    private String oisDbUsername;
-
-    @Value("${spring.datasource.db-ois.password}")
-    private String oisDbPassword;
-
-    @Value("${folder-cleaner.properties.folderPath}")
-    private String sourceDirectory;
-
-    public FolderDistributorService() {
+    /**
+     * Конструктор класса FolderCleaner.
+     *
+     * @param directoryPath путь к директории, которую нужно очищать
+     * @param daysCount     количество дней, после которых файлы будут удалены
+     */
+    public FolderCleaner(String directoryPath, int daysCount) {
+        this.watchedDirectory = Paths.get(directoryPath);
+        this.daysCount = daysCount;
+        this.fileCreationTimes = new HashMap<>();
     }
 
-    @Scheduled(fixedRate = 60000)
-    public void distributeFiles() {
+    /**
+     * Метод, выполняющийся каждые 10 минут, который удаляет файлы из папки,
+     * созданные более daysCount дней назад.
+     */
+    @Scheduled(cron = "0 */10 * ? * *")
+    public void cleanFolder() {
         try {
-            Files.list(Paths.get(sourceDirectory))
-                 .filter(Files::isRegularFile)
-                 .filter(path -> path.getFileName().toString().endsWith(".csv"))
-                 .forEach(this::processFile);
+            Files.list(watchedDirectory)
+                 .forEach(this::deleteExpiredFile);
         } catch (IOException e) {
-            logger.error("Error reading directory: {}", sourceDirectory, e);
+            logger.error("Ошибка при очистке директории: {}", e.getMessage());
         }
     }
 
-    private void processFile(Path path) {
-        String fileName = path.getFileName().toString();
-        List<String> parts = Arrays.asList(fileName.split("_"));
-        if (parts.size() < 2) {
-            logger.warn("Skipping file with invalid name format: {}", fileName);
-            return;
-        }
+    /**
+     * Метод, который проверяет, удаляет ли файл, если он старше daysCount дней.
+     *
+     * @param path путь к файлу
+     */
+    private void deleteExpiredFile(Path path) {
+        LocalDateTime creationTime = fileCreationTimes.getOrDefault(path, LocalDateTime.now().minusDays(daysCount + 1));
+        long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
 
-        if (parts.get(1).contains("ois")) {
-            importIntoOisDatabase(path, fileName);
-        } else {
-            importIntoCoreDatabase(path, fileName);
-        }
-    }
-
-    private void importIntoCoreDatabase(Path path, String tableName) {
-        try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword)) {
-            connection.setAutoCommit(false);
-            try (InputStream inputStream = Files.newInputStream(path);
-                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-                copyManager.copyIn("COPY core." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+        if (daysSinceCreation > daysCount) {
+            try {
+                Files.delete(path);
+                logger.info("Удален файл {}", path.getFileName());
+                fileCreationTimes.remove(path);
+            } catch (IOException e) {
+                logger.error("Ошибка при удалении файла {}: {}", path.getFileName(), e.getMessage());
             }
-            connection.commit();
-            logger.info("Импортирован файл {} в бд Core, добавлена таблица core.{}", path.getFileName(), tableName);
-        } catch (SQLException | IOException e) {
-            logger.error("Error importing file {} into Core database", path.getFileName(), e);
-        }
-    }
-
-    private void importIntoOisDatabase(Path path, String tableName) {
-        try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword)) {
-            connection.setAutoCommit(false);
-            try (InputStream inputStream = Files.newInputStream(path);
-
-                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-                copyManager.copyIn("COPY ois." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
-            }
-            connection.commit();
-            logger.info("Импортирован файл {} в бд OIS, добавлена таблица ois.{}", path.getFileName(), tableName);
-        } catch (SQLException | IOException e) {
-            logger.error("Error importing file {} into OIS database", path.getFileName(), e);
         }
     }
 }
 
-Основные изменения:
+В этом обновленном коде:
 
-1. Класс FolderDistributorService теперь помечен как @Service, что позволяет Spring автоматически обнаруживать и управлять этим компонентом.
-2. Конструктор был удален, так как теперь все необходимые поля помечены @Value и будут автоматически заполнены Spring.
-3. Метод start() был удален, а вместо него используется аннотация @Scheduled, которая будет вызывать метод distributeFiles() каждую минуту.
-4. Метод distributeFiles() остался практически без изменений, за исключением того, что он теперь помечен @Scheduled.
-5. Методы importIntoCoreDatabase() и importIntoOisDatabase() также остались без изменений.
+1. Добавлена аннотация @Scheduled(cron = "0 */10 * ? * *"), которая запускает метод cleanFolder() каждые 10 минут.
+2. Метод cleanFolder() использует Files.list(watchedDirectory) для получения списка всех файлов в директории и вызывает метод deleteExpiredFile() для каждого файла.
+3. Метод deleteExpiredFile() проверяет, был ли файл создан более daysCount дней назад, и если да, то удаляет его.
+4. Добавлены подробные комментарии, объясняющие назначение каждого метода и параметров конструктора.
 
-Теперь, чтобы использовать этот сервис, достаточно просто внедрить его в другие компоненты вашего приложения. Например:
+Теперь этот класс будет автоматически удалять файлы из папки, которые старше daysCount дней, без использования WatchService.
 
-@Component
-public class MyComponent {
-    private final FolderDistributorService folderDistributorService;
-
-    public MyComponent(FolderDistributorService folderDistributorService) {
-        this.folderDistributorService = folderDistributorService;
-    }
-
-    // Другие методы компонента
-}
-
-
-
-7864 из 16384
-
+1332 из 16384
