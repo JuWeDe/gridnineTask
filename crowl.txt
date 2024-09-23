@@ -1,13 +1,14 @@
 Беседа № 129: 
 Выбрана Ваша роль: Программист
 
-Понял, тогда вот решение с использованием внедрения зависимостей через конструктор:
+Понял, спасибо за дополнительные требования. Вот обновленное решение, которое выполняет все необходимые запросы за один раз:
 
 package com.example.demo.services;
 
+import com.example.demo.models.FileIteration;
+import com.example.demo.repositories.FileIterationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -19,25 +20,25 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
     private final Path watchedDirectory;
-    private final int daysCount;
+    private final FileIterationRepository fileIterationRepository;
     private final Map<Path, LocalDateTime> fileCreationTimes;
 
     /**
      * Конструктор класса FolderCleaner, в который передаются необходимые параметры.
      *
-     * @param directoryPath путь к директории, которую нужно очищать
-     * @param daysCount     количество дней, после которых файлы будут удалены
+     * @param directoryPath             путь к директории, которую нужно очищать
+     * @param fileIterationRepository   репозиторий для работы с таблицей file_iterations
      */
-    public FolderCleaner(@Value("${app.directory-path}") String directoryPath,
-                        @Value("${app.days-count}") int daysCount) {
+    public FolderCleaner(String directoryPath, FileIterationRepository fileIterationRepository) {
         this.watchedDirectory = Paths.get(directoryPath);
-        this.daysCount = daysCount;
+        this.fileIterationRepository = fileIterationRepository;
         this.fileCreationTimes = new HashMap<>();
     }
 
@@ -61,31 +62,39 @@ public class FolderCleaner {
      * @param path путь к файлу
      */
     private void deleteExpiredFile(Path path) {
-        LocalDateTime creationTime = fileCreationTimes.getOrDefault(path, LocalDateTime.now().minusDays(daysCount + 1));
-        long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
+        int daysCount = getExpireDaysForFile(path);
 
-        if (daysSinceCreation > daysCount) {
-            try {
-                Files.delete(path);
-                logger.info("Удален файл {}", path.getFileName());
-                fileCreationTimes.remove(path);
-            } catch (IOException e) {
-                logger.error("Ошибка при удалении файла {}: {}", path.getFileName(), e.getMessage());
+        if (daysCount > 0) {
+            LocalDateTime creationTime = fileCreationTimes.getOrDefault(path, LocalDateTime.now().minusDays(daysCount + 1));
+            long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
+
+            if (daysSinceCreation > daysCount) {
+                try {
+                    Files.delete(path);
+                    logger.info("Удален файл {}", path.getFileName());
+                    fileCreationTimes.remove(path);
+                } catch (IOException e) {
+                    logger.error("Ошибка при удалении файла {}: {}", path.getFileName(), e.getMessage());
+                }
             }
         }
+    }
+
+    /**
+     * Метод, который получает количество дней, через которое файл должен быть удален,
+     * на основе информации из таблицы file_iterations.
+     *
+     * @param path путь к файлу
+     * @return количество дней, после которых файл будет удален
+     */
+    private int getExpireDaysForFile(Path path) {
+        Optional<FileIteration> fileIterationOptional = fileIterationRepository.findByCategoryIdAndFileName(
+                path.getFileName().toString());
+
+        return fileIterationOptional.map(FileIteration::getDaysToExpire).orElse(0);
     }
 }
 
 В этом решении:
 
-1. Параметры directoryPath и daysCount внедряются в конструктор класса с помощью аннотации @Value.
-2. Значения для этих параметров должны быть определены в файле конфигурации приложения (например, application.properties или application.yml).
-
-Пример конфигурации:
-
-app.directory-path=/path/to/directory
-app.days-count=7
-
-Таким образом, Spring сможет автоматически внедрить необходимые параметры в конструктор FolderCleaner при создании экземпляра этого класса.
-
-2115 из 16384
+1. Добавлен FileIterationRepository, который должен быть реализован для работы с таблицей file_iterations в базе данных H2.
