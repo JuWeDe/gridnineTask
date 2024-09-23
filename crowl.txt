@@ -1,12 +1,13 @@
 Беседа № 129: 
 Выбрана Ваша роль: Программист
 
-Вот обновленный код с комментариями и аннотацией для запуска каждые 10 минут:
+Понял, тогда вот решение с использованием внедрения зависимостей через конструктор:
 
 package com.example.demo.services;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -28,12 +29,13 @@ public class FolderCleaner {
     private final Map<Path, LocalDateTime> fileCreationTimes;
 
     /**
-     * Конструктор класса FolderCleaner.
+     * Конструктор класса FolderCleaner, в который передаются необходимые параметры.
      *
      * @param directoryPath путь к директории, которую нужно очищать
      * @param daysCount     количество дней, после которых файлы будут удалены
      */
-    public FolderCleaner(String directoryPath, int daysCount) {
+    public FolderCleaner(@Value("${app.directory-path}") String directoryPath,
+                        @Value("${app.days-count}") int daysCount) {
         this.watchedDirectory = Paths.get(directoryPath);
         this.daysCount = daysCount;
         this.fileCreationTimes = new HashMap<>();
@@ -74,13 +76,16 @@ public class FolderCleaner {
     }
 }
 
-В этом обновленном коде:
+В этом решении:
 
-1. Добавлена аннотация @Scheduled(cron = "0 */10 * ? * *"), которая запускает метод cleanFolder() каждые 10 минут.
-2. Метод cleanFolder() использует Files.list(watchedDirectory) для получения списка всех файлов в директории и вызывает метод deleteExpiredFile() для каждого файла.
-3. Метод deleteExpiredFile() проверяет, был ли файл создан более daysCount дней назад, и если да, то удаляет его.
-4. Добавлены подробные комментарии, объясняющие назначение каждого метода и параметров конструктора.
+1. Параметры directoryPath и daysCount внедряются в конструктор класса с помощью аннотации @Value.
+2. Значения для этих параметров должны быть определены в файле конфигурации приложения (например, application.properties или application.yml).
 
-Теперь этот класс будет автоматически удалять файлы из папки, которые старше daysCount дней, без использования WatchService.
+Пример конфигурации:
 
-1332 из 16384
+app.directory-path=/path/to/directory
+app.days-count=7
+
+Таким образом, Spring сможет автоматически внедрить необходимые параметры в конструктор FolderCleaner при создании экземпляра этого класса.
+
+2115 из 16384
