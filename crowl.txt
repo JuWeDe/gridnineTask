@@ -1,52 +1,65 @@
-Беседа № 126: 
-Выбрана Ваша роль: Программист
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-Чтобы настроить Logback на создание отдельного лог-файла для каждого дня, можно использовать следующую конфигурацию:
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/app.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/app_%d{yyyy-MM-dd}.log</fileNamePattern>
-            <maxHistory>30</maxHistory>
-        </rollingPolicy>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
+public class FolderCleaner {
+    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
-    <root level="info">
-        <appender-ref ref="FILE" />
-    </root>
-</configuration>
+    private final Path watchedDirectory;
+    private final ScheduledExecutorService scheduledExecutorService;
+    private final Map<Path, LocalDateTime> fileCreationTimes;
+    private final int daysToExpire;
 
-Рассмотрим основные элементы этой конфигурации:
+    public FolderCleaner(String directoryPath, int daysToExpire) {
+        this.watchedDirectory = Paths.get(directoryPath);
+        this.daysToExpire = daysToExpire;
+        this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+        this.fileCreationTimes = new HashMap<>();
+    }
 
-1. <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">: Определяет файловый аппендер, который будет управлять выводом логов в файл.
-2. <file>logs/app.log</file>: Задает базовое имя файла, в данном случае "app.log".
-3. <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">: Определяет политику ротации файлов на основе времени.
-4. <fileNamePattern>logs/app_%d{yyyy-MM-dd}.log</fileNamePattern>: Устанавливает шаблон для имени файлов. В данном случае, файлы будут иметь имя "app_YYYY-MM-DD.log", где YYYY-MM-DD - дата создания файла.
-5. <maxHistory>30</maxHistory>: Задает максимальное количество дней, в течение которых сохраняются старые лог-файлы (30 дней в данном примере).
-6. <encoder>: Определяет формат вывода логов внутри файлов.
+    public void start() {
+        scheduledExecutorService.scheduleAtFixedRate(this::cleanExpiredFiles, 0, 1, TimeUnit.DAYS);
+        logger.info("FolderCleaner started monitoring directory: {}", watchedDirectory);
 
-Когда приложение запускается с этой конфигурацией, Logback будет автоматически создавать новый лог-файл каждый день, сохраняя предыдущие файлы в течение 30 дней.
+        // 无限循环,确保程序不会终止
+        while (true) {
+            try {
+                Thread.sleep(Long.MAX_VALUE);
+            } catch (InterruptedException e) {
+                logger.error("Interrupted exception occurred in FolderCleaner", e);
+            }
+        }
+    }
 
-Например, 1 января будет создан файл "app_2023-01-01.log", 2 января - "app_2023-01-02.log" и так далее. Старые файлы будут удаляться по мере достижения 30-дневного лимита.
+    private void cleanExpiredFiles() {
+        LocalDateTime expirationTime = LocalDateTime.now().minus(daysToExpire, ChronoUnit.DAYS);
+        fileCreationTimes.entrySet().removeIf(entry -> {
+            Path path = entry.getKey();
+            LocalDateTime creationTime = entry.getValue();
+            if (creationTime.isBefore(expirationTime)) {
+                try {
+                    Files.delete(path);
+                    logger.info("Deleted file: {}", path.getFileName());
+                    return true;
+                } catch (IOException e) {
+                    logger.error("Error deleting file: {}", path.getFileName(), e);
+                }
+            }
+            return false;
+        });
+    }
+}
 
-Этот подход позволяет поддерживать упорядоченные и компактные лог-файлы, облегчая их анализ и управление.
+在
 
-1. %d - дата и время события. Может иметь дополнительные параметры для форматирования даты и времени, например, %d{yyyy-MM-dd HH:mm:ss.SSS}.
-2. %t - имя потока, в котором произошло событие.
-3. %p - уровень приоритета события (TRACE, DEBUG, INFO, WARN, ERROR, FATAL).
-4. %c - название логгера, которому принадлежит событие. Может использоваться для группирования событий по категориям.
-5. %C - название класса, в котором произошло событие.
-6. %M - название метода, в котором произошло событие.
-7. %L - номер строки кода, в которой произошло событие.
-8. %m - само сообщение, которое было записано в лог.
-9. %n - символ новой строки (платформозависимый).
-10. %F - название файла, в котором произошло событие.
-11. %X{key} - значение контекстной переменной с ключом "key".
-12. %X - вывод всех контекстных переменных.
-13. %caller{depth} - информация о вызывающем методе, с указанием глубины стека (depth).
-14. %marker - вывод маркеров, связанных с событием.
