@@ -1,14 +1,13 @@
 Беседа № 129: 
 Выбрана Ваша роль: Программист
 
-Понял, спасибо за дополнительные требования. Вот обновленное решение, которое выполняет все необходимые запросы за один раз:
+Понял, вот решение без использования Spring Data JPA репозиториев, только с использованием чистого JDBC:
 
 package com.example.demo.services;
 
-import com.example.demo.models.FileIteration;
-import com.example.demo.repositories.FileIterationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -16,29 +15,42 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
     private final Path watchedDirectory;
-    private final FileIterationRepository fileIterationRepository;
+    private final String jdbcUrl;
+    private final String jdbcUsername;
+    private final String jdbcPassword;
     private final Map<Path, LocalDateTime> fileCreationTimes;
 
     /**
      * Конструктор класса FolderCleaner, в который передаются необходимые параметры.
      *
-     * @param directoryPath             путь к директории, которую нужно очищать
-     * @param fileIterationRepository   репозиторий для работы с таблицей file_iterations
+     * @param directoryPath путь к директории, которую нужно очищать
+     * @param jdbcUrl       URL для подключения к базе данных
+     * @param jdbcUsername  username для подключения к базе данных
+     * @param jdbcPassword  password для подключения к базе данных
      */
-    public FolderCleaner(String directoryPath, FileIterationRepository fileIterationRepository) {
+    public FolderCleaner(@Value("${app.directory-path}") String directoryPath,
+                        @Value("${spring.datasource.url}") String jdbcUrl,
+                        @Value("${spring.datasource.username}") String jdbcUsername,
+                        @Value("${spring.datasource.password}") String jdbcPassword) {
         this.watchedDirectory = Paths.get(directoryPath);
-        this.fileIterationRepository = fileIterationRepository;
+        this.jdbcUrl = jdbcUrl;
+        this.jdbcUsername = jdbcUsername;
+        this.jdbcPassword = jdbcPassword;
         this.fileCreationTimes = new HashMap<>();
     }
 
@@ -62,7 +74,7 @@ public class FolderCleaner {
      * @param path путь к файлу
      */
     private void deleteExpiredFile(Path path) {
-        int daysCount = getExpireDaysForFile(path);
+        int daysCount = getExpireDaysForFile(path.getFileName().toString());
 
         if (daysCount > 0) {
             LocalDateTime creationTime = fileCreationTimes.getOrDefault(path, LocalDateTime.now().minusDays(daysCount + 1));
@@ -84,17 +96,41 @@ public class FolderCleaner {
      * Метод, который получает количество дней, через которое файл должен быть удален,
      * на основе информации из таблицы file_iterations.
      *
-     * @param path путь к файлу
+     * @param fileName имя файла
      * @return количество дней, после которых файл будет удален
      */
-    private int getExpireDaysForFile(Path path) {
-        Optional<FileIteration> fileIterationOptional = fileIterationRepository.findByCategoryIdAndFileName(
-                path.getFileName().toString());
 
-        return fileIterationOptional.map(FileIteration::getDaysToExpire).orElse(0);
+    private int getExpireDaysForFile(String fileName) {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, jdbcUsername, jdbcPassword);
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT fi.days_to_expire " +
+                     "FROM file_iterations fi " +
+                     "WHERE fi.file_name = ?")) {
+            statement.setString(1, fileName);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    return resultSet.getInt("days_to_expire");
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("Ошибка при получении daysToExpire: {}", e.getMessage());
+        }
+        return 0;
     }
 }
 
 В этом решении:
 
-1. Добавлен FileIterationRepository, который должен быть реализован для работы с таблицей file_iterations в базе данных H2.
+1. Параметры для подключения к базе данных (jdbcUrl, jdbcUsername, jdbcPassword) внедряются в конструктор с помощью @Value.
+2. Метод getExpireDaysForFile() использует чистый JDBC для выполнения запроса к базе данных и получения значения days_to_expire для заданного имени файла.
+3. Метод deleteExpiredFile() использует результат, возвращаемый getExpireDaysForFile(), для проверки и удаления файлов.
+
+Убедитесь, что в файле application.properties или application.yml вы указали правильные значения для Spring Data источника данных:
+
+spring.datasource.url=jdbc:h2:mem:testdb
+spring.datasource.username=sa
+spring.datasource.password=password
+
+Это решение не использует Spring Data JPA репозитории, а напрямую работает с JDBC для получения значения days_to_expire из базы данных.
+
+5537 из 16384
