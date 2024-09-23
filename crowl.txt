@@ -63,3 +63,118 @@ public class FolderCleaner {
 
 在
 
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public class FileDistributor {
+    private static final Logger logger = LoggerFactory.getLogger(FileDistributor.class);
+
+    private final Path sourceDirectory;
+    private final String coreDbUrl;
+    private final String coreDbUsername;
+    private final String coreDbPassword;
+    private final String oisDbUrl;
+    private final String oisDbUsername;
+    private final String oisDbPassword;
+    private final ScheduledExecutorService scheduledExecutorService;
+
+    public FileDistributor(String sourceDirectory, String coreDbUrl, String coreDbUsername, String coreDbPassword,
+                           String oisDbUrl, String oisDbUsername, String oisDbPassword) {
+        this.sourceDirectory = Paths.get(sourceDirectory);
+        this.coreDbUrl = coreDbUrl;
+        this.coreDbUsername = coreDbUsername;
+        this.coreDbPassword = coreDbPassword;
+        this.oisDbUrl = oisDbUrl;
+        this.oisDbUsername = oisDbUsername;
+        this.oisDbPassword = oisDbPassword;
+        this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+    }
+
+    public void start() {
+        scheduledExecutorService.scheduleAtFixedRate(this::distributeFiles, 0, 1, TimeUnit.MINUTES);
+        logger.info("FileDistributor started monitoring directory: {}", sourceDirectory);
+    }
+
+    private void distributeFiles() {
+        try {
+            Files.list(sourceDirectory)
+                 .filter(Files::isRegularFile)
+                 .filter(path -> path.getFileName().toString().endsWith(".csv"))
+                 .forEach(this::processFile);
+        } catch (IOException e) {
+            logger.error("Error reading directory: {}", sourceDirectory, e);
+        }
+    }
+
+    private void processFile(Path path) {
+        String fileName = path.getFileName().toString();
+        List<String> parts = Arrays.asList(fileName.split("_"));
+        if (parts.size() < 2) {
+            logger.warn("Skipping file with invalid name format: {}", fileName);
+            return;
+        }
+
+        if (parts.get(1).contains("ois")) {
+            importIntoOisDatabase(path, fileName);
+        } else {
+            importIntoCoreDatabase(path, fileName);
+        }
+    }
+
+    private void importIntoCoreDatabase(Path path, String tableName) {
+        try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword)) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement("CREATE TABLE IF NOT EXISTS core." + tableName + " (data TEXT)")) {
+                statement.executeUpdate();
+            }
+
+            try (InputStream inputStream = Files.newInputStream(path);
+                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+                copyManager.copyIn("COPY core." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+            }
+
+connection.commit();
+
+
+            logger.info("Imported file {} into Core database table core.{}", path.getFileName(), tableName);
+        } catch (SQLException | IOException e) {
+            logger.error("Error importing file {} into Core database", path.getFileName(), e);
+        }
+    }
+
+    private void importIntoOisDatabase(Path path, String tableName) {
+        try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword)) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement("CREATE TABLE IF NOT EXISTS ois." + tableName + " (data TEXT)")) {
+                statement.executeUpdate();
+            }
+
+            try (InputStream inputStream = Files.newInputStream(path);
+                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+                copyManager.copyIn("COPY ois." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+            }
+
+            connection.commit();
+            logger.info("Imported file {} into OIS database table ois.{}", path.getFileName(), tableName);
+        } catch (SQLException | IOException e) {
+            logger.error("Error importing file {} into OIS database", path.getFileName(), e);
+        }
+    }
+}
