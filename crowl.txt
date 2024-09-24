@@ -1,172 +1,26 @@
-Беседа № 129: 
-Выбрана Ваша роль: Программист
-
-Вот более подробные комментарии с аннотациями:
-
-package com.example.demo.services;
-
-import org.postgresql.copy.CopyManager;
-import org.postgresql.core.BaseConnection;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.Arrays;
-import java.util.List;
-
-/**
- * Сервис, отвечающий за импорт CSV-файлов в базы данных Core и OIS.
- */
-@Service
-public class FileImporterService {
-    // Логгер для записи информации и ошибок
-    private static final org.slf4j.Logger logger = LoggerFactory.getLogger(FileImporterService.class);
-
-    /**
-     * URL для подключения к базе данных Core.
-     */
-    @Value("${spring.datasource.db-core.jdbc-url}")
-    private String coreDbUrl;
-
-    /**
-     * Имя пользователя для подключения к базе данных Core.
-     */
-    @Value("${spring.datasource.db-core.username}")
-    private String coreDbUsername;
-
-    /**
-     * Пароль для подключения к базе данных Core.
-     */
-    @Value("${spring.datasource.db-core.password}")
-    private String coreDbPassword;
-
-    /**
-     * URL для подключения к базе данных OIS.
-     */
-    @Value("${spring.datasource.db-ois.jdbc-url}")
-    private String oisDbUrl;
-
-    /**
-     * Имя пользователя для подключения к базе данных OIS.
-     */
-    @Value("${spring.datasource.db-ois.username}")
-    private String oisDbUsername;
-
-    /**
-     * Пароль для подключения к базе данных OIS.
-     */
-    @Value("${spring.datasource.db-ois.password}")
-    private String oisDbPassword;
-
-    /**
-     * Путь к директории, из которой будут импортироваться файлы.
-     */
-    @Value("${folder-cleaner.properties.folderPath}")
-    private String sourceDirectory;
-
-    public FileImporterService() {
-    }
-
-    /**
-     * Метод, который будет запускаться по расписанию (каждый день в 10:00).
-     * Он получает список файлов в директории, фильтрует их по расширению '.csv'
-     * и вызывает метод {@link #processFile(Path)} для каждого файла.
-     */
-    @Scheduled(cron = "0 0 10 * * ")
-    private void distributeFiles() {
-        try {
-            Files.list(Path.of(sourceDirectory))
-                 .filter(Files::isRegularFile)
-                 .filter(path -> path.getFileName().toString().endsWith(".csv"))
-                 .forEach(this::processFile);
-        } catch (IOException e) {
-            logger.error("Ошибка чтения директории: {}", sourceDirectory, e);
+private void importIntoCoreDatabase(Path path, String tableName) {
+    try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
+         InputStream inputStream = Files.newInputStream(path)) {
+        connection.setAutoCommit(false);
+        try (CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+            copyManager.copyIn("COPY core." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
         }
-    }
-
-    /**
-     * Метод, который обрабатывает каждый файл.
-     * Он определяет, в какую базу данных (Core или OIS) нужно импортировать файл,
-     * и вызывает соответствующий метод {@link #importIntoCoreDatabase(Path, String)}
-     * или {@link #importIntoOisDatabase(Path, String)}.
-     *
-     * @param path путь к файлу
-     */
-    private void processFile(Path path) {
-        String fileName = path.getFileName().toString();
-        List<String> parts = Arrays.asList(fileName.split(""));
-
-        if (parts.get(1).contains("ois")) {
-            importIntoOisDatabase(path, fileName);
-        } else {
-            importIntoCoreDatabase(path, fileName);
-        }
-    }
-
-    /**
-     * Метод, который импортирует файл в базу данных Core.
-     * Он устанавливает соединение с базой данных, отключает автокоммит,
-     * импортирует данные из файла в таблицу "core.[tableName]" и коммитит транзакцию.
-     * В случае ошибок записывает информацию в логи.
-     *
-     
-* @param path       путь к файлу
-     * @param tableName  название таблицы, в которую нужно импортировать данные
-     */
-    private void importIntoCoreDatabase(Path path, String tableName) {
-        try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword)) {
-            connection.setAutoCommit(false);
-            try (InputStream inputStream = Files.newInputStream(path);
-                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-                copyManager.copyIn("COPY core." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
-            }
-            connection.commit();
-            logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
-        } catch (SQLException | IOException e) {
-            logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
-        }
-    }
-
-    /**
-     * Метод, который импортирует файл в базу данных OIS.
-     * Он устанавливает соединение с базой данных, отключает автокоммит,
-     * импортирует данные из файла в таблицу "ois.[tableName]" и коммитит транзакцию.
-     * В случае ошибок записывает информацию в логи.
-     *
-     * @param path       путь к файлу
-     * @param tableName  название таблицы, в которую нужно импортировать данные
-     */
-    private void importIntoOisDatabase(Path path, String tableName) {
-        try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword)) {
-            connection.setAutoCommit(false);
-            try (InputStream inputStream = Files.newInputStream(path);
-                 CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-                copyManager.copyIn("COPY ois." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
-            }
-            connection.commit();
-            logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
-        } catch (SQLException | IOException e) {
-            logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
-        }
+        connection.commit();
+        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
+    } catch (SQLException | IOException e) {
+        logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
     }
 }
 
-Основные комментарии с аннотациями:
-
-1. Класс FileImporterService является сервисом, отвечающим за импорт CSV-файлов в базы данных Core и OIS.
-2. Класс использует Spring для внедрения необходимых параметров подключения к базам данных.
-3. Метод distributeFiles() запускается по расписанию (каждый день в 10:00) и обрабатывает все CSV-файлы в указанной директории.
-4. Метод processFile(Path path) определяет, в какую базу данных (Core или OIS) нужно импортировать файл, и вызывает соответствующий метод.
-5. Метод importIntoCoreDatabase(Path path, String tableName) импортирует данные из CSV-файла в таблицу базы данных Core, используя PostgreSQL-специфичный класс CopyManager.
-6. Метод importIntoOisDatabase(Path path, String tableName) импортирует данные из CSV-файла в таблицу базы данных OIS, используя PostgreSQL-специфичный класс CopyManager.
-7. В случае ошибок во время импорта, информация об ошибках записывается в логи.
-
-8612 из 16384
+private void importIntoOisDatabase(Path path, String tableName) {
+    try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
+         InputStream inputStream = Files.newInputStream(path)) {
+        connection.setAutoCommit(false);
+        try (CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+            copyManager.copyIn("COPY ois." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+        }
+        connection.commit();
+        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
+    } catch (SQLException | IOException e) {
+        logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
+    }
