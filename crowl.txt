@@ -1,30 +1,36 @@
-Беседа № 129: 
+Беседа № 135: 
 Выбрана Ваша роль: Программист
 
-Понял, в таком случае вам нужно изменить код для создания таблиц с именами файлов и вставки данных в них. Вот пример того, как можно это сделать:
+Вот реализация двух методов для импортирования CSV-файлов в базы данных без использования CopyManager:
 
 private void importIntoCoreDatabase(Path path, String tableName) {
     try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
          Statement statement = connection.createStatement();
-         InputStream inputStream = Files.newInputStream(path);
-         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-        connection.setAutoCommit(false);
-
-        // Создаем таблицу с именем файла
-        String createTableSql = "CREATE TABLE core." + tableName + " (data TEXT)";
-        statement.executeUpdate(createTableSql);
-
-        // Вставляем данные из файла в таблицу
+         BufferedReader reader = Files.newBufferedReader(path)) {
+        
+        // Создание таблицы
+        String createTableQuery = createTableQuery(tableName, reader.readLine());
+        statement.executeUpdate(createTableQuery);
+        
+        // Вставка данных
+        String insertQuery = "INSERT INTO core." + tableName + " VALUES (?";
+        for (int i = 1; i < columnCount; i++) {
+            insertQuery += ", ?";
+        }
+        insertQuery += ")";
+        PreparedStatement insertStatement = connection.prepareStatement(insertQuery);
+        
         String line;
         while ((line = reader.readLine()) != null) {
-            String insertSql = "INSERT INTO core." + tableName + " (data) VALUES (?)";
-            PreparedStatement preparedStatement = connection.prepareStatement(insertSql);
-            preparedStatement.setString(1, line);
-            preparedStatement.executeUpdate();
+            String[] values = line.split(",");
+            for (int i = 0; i < values.length; i++) {
+                insertStatement.setString(i + 1, values[i]);
+            }
+            insertStatement.executeUpdate();
         }
-
+        
         connection.commit();
-        logger.info("Импортирован файл {} в бд Core, создана новая таблица {}", path.getFileName(), tableName);
+        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
     } catch (SQLException | IOException e) {
         logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
     }
@@ -33,36 +39,51 @@ private void importIntoCoreDatabase(Path path, String tableName) {
 private void importIntoOisDatabase(Path path, String tableName) {
     try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
          Statement statement = connection.createStatement();
-         InputStream inputStream = Files.newInputStream(path);
-         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-        connection.setAutoCommit(false);
-
-        // Создаем таблицу с именем файла
-        String createTableSql = "CREATE TABLE ois." + tableName + " (data TEXT)";
-        statement.executeUpdate(createTableSql);
-
-        // Вставляем данные из файла в таблицу
+         BufferedReader reader = Files.newBufferedReader(path)) {
+        
+        // Создание таблицы
+        String createTableQuery = createTableQuery(tableName, reader.readLine());
+        statement.executeUpdate(createTableQuery);
+        
+        // Вставка данных
+        String insertQuery = "INSERT INTO ois." + tableName + " VALUES (?";
+        for (int i = 1; i < columnCount; i++) {
+            insertQuery += ", ?";
+        }
+        insertQuery += ")";
+        PreparedStatement insertStatement = connection.prepareStatement(insertQuery);
+        
         String line;
         while ((line = reader.readLine()) != null) {
-            String insertSql = "INSERT INTO ois." + tableName + " (data) VALUES (?)";
-            PreparedStatement preparedStatement = connection.prepareStatement(insertSql);
-            preparedStatement.setString(1, line);
-            preparedStatement.executeUpdate();
+            String[] values = line.split(",");
+            for (int i = 0; i < values.length; i++) {
+                insertStatement.setString(i + 1, values[i]);
+            }
+            insertStatement.executeUpdate();
         }
-
+        
         connection.commit();
-        logger.info("Импортирован файл {} в бд OIS, создана новая таблица {}", path.getFileName(), tableName);
+        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
     } catch (SQLException | IOException e) {
         logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
     }
 }
 
+private String createTableQuery(String tableName, String headerLine) {
+    StringBuilder query = new StringBuilder("CREATE TABLE core." + tableName + " (");
+    String[] columns = headerLine.split(",");
+    columnCount = columns.length;
+    for (int i = 0; i < columns.length; i++) {
+        query.append(columns[i]).append(" VARCHAR(255)");
+        if (i < columns.length - 1) {
+            query.append(", ");
+        }
+    }
+    query.append(")");
+    return query.toString();
+}
+
 Основные изменения:
 
-1. Теперь в начале каждого метода создается новая таблица с именем файла в соответствующей базе данных (Core или OIS).
-2. Данные из CSV-файла вставляются в эту таблицу построчно с помощью PreparedStatement.
-3. После завершения импорта данных, транзакция коммитится.
-
-Этот код должен работать как требуется - создавать новые таблицы с именами файлов и импортировать данные из CSV-файлов в соответствующие базы данных.
-
-7579 из 16384
+1. Вместо CopyManager используется BufferedReader для чтения данных из CSV-файла.
+2. Сначала создается таблица с помощью метода createTableQuery(), который парсит заголовок CSV-файла и формирует SQL-запрос для создания таблицы.
