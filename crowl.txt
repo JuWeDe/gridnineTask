@@ -86,4 +86,82 @@ private String createTableQuery(String tableName, String headerLine) {
 Основные изменения:
 
 1. Вместо CopyManager используется BufferedReader для чтения данных из CSV-файла.
-2. Сначала создается таблица с помощью метода createTableQuery(), который парсит заголовок CSV-файла и формирует SQL-запрос для создания таблицы.
+2. Сначала создается таблица с 
+помощью метода createTableQuery(), который 
+
+
+
+парсит заголовок CSV-файла и формирует SQL-запрос для создания таблицы
+
+Беседа № 135: 
+Выбрана Ваша роль: Программист
+
+Вот методы с использованием CopyManager:
+
+private void importIntoCoreDatabase(Path path, String tableName) {
+    try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
+         CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+        
+        // Создание таблицы
+        createTable(connection, tableName, path);
+        
+        // Импортирование данных
+        connection.setAutoCommit(false);
+        copyManager.copyIn("COPY core." + tableName + " FROM STDIN WITH (FORMAT CSV, HEADER)", Files.newInputStream(path));
+        connection.commit();
+        
+        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
+    } catch (SQLException | IOException e) {
+        logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
+    }
+}
+
+private void importIntoOisDatabase(Path path, String tableName) {
+    try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
+         CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
+        
+        // Создание таблицы
+        createTable(connection, tableName, path);
+        
+        // Импортирование данных
+        connection.setAutoCommit(false);
+        copyManager.copyIn("COPY ois." + tableName + " FROM STDIN WITH (FORMAT CSV, HEADER)", Files.newInputStream(path));
+        connection.commit();
+        
+        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
+    } catch (SQLException | IOException e) {
+        logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
+    }
+}
+
+private void createTable(Connection connection, String tableName, Path path) throws SQLException, IOException {
+    try (Statement statement = connection.createStatement();
+         BufferedReader reader = Files.newBufferedReader(path)) {
+        
+        // Создание таблицы
+        String[] columns = reader.readLine().split(",");
+        StringBuilder createTableQuery = new StringBuilder("CREATE TABLE core." + tableName + " (");
+        for (int i = 0; i < columns.length; i++) {
+            createTableQuery.append(columns[i]).append(" VARCHAR(255)");
+            if (i < columns.length - 1) {
+                createTableQuery.append(", ");
+            }
+        }
+        createTableQuery.append(")");
+        statement.executeUpdate(createTableQuery.toString());
+    }
+}
+
+Основные изменения:
+
+1. Используется метод createTable() для создания таблицы на основе заголовка CSV-файла.
+2. В методах importIntoCoreDatabase() и importIntoOisDatabase() сначала создается таблица, а затто импортируются данные с помощью CopyManager.
+3. Для импортирования данных используется команда COPY ... FROM STDIN WITH (FORMAT CSV, HEADER), которая позволяет эффективно импортировать данные из CSV-файла в базу данных.
+
+Этот подход использует преимущества CopyManager, что может обеспечить более высокую производительность при импортировании больших объемов данных.
+
+2202 из 16384
+
+
+
+.
