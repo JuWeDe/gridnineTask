@@ -1,18 +1,30 @@
 Беседа № 129: 
 Выбрана Ваша роль: Программист
 
-Вы правы, нужно использовать BaseConnection для того, чтобы CopyManager работал корректно. Вот пример того, как можно переписать методы импорта, используя BaseConnection:
+Понял, в таком случае вам нужно изменить код для создания таблиц с именами файлов и вставки данных в них. Вот пример того, как можно это сделать:
 
 private void importIntoCoreDatabase(Path path, String tableName) {
     try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
-         InputStream inputStream = Files.newInputStream(path)) {
+         Statement statement = connection.createStatement();
+         InputStream inputStream = Files.newInputStream(path);
+         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
         connection.setAutoCommit(false);
-        BaseConnection baseConnection = connection.unwrap(BaseConnection.class);
-        try (CopyManager copyManager = new CopyManager(baseConnection)) {
-            copyManager.copyIn("COPY core." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+
+        // Создаем таблицу с именем файла
+        String createTableSql = "CREATE TABLE core." + tableName + " (data TEXT)";
+        statement.executeUpdate(createTableSql);
+
+        // Вставляем данные из файла в таблицу
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String insertSql = "INSERT INTO core." + tableName + " (data) VALUES (?)";
+            PreparedStatement preparedStatement = connection.prepareStatement(insertSql);
+            preparedStatement.setString(1, line);
+            preparedStatement.executeUpdate();
         }
+
         connection.commit();
-        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
+        logger.info("Импортирован файл {} в бд Core, создана новая таблица {}", path.getFileName(), tableName);
     } catch (SQLException | IOException e) {
         logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
     }
@@ -20,14 +32,26 @@ private void importIntoCoreDatabase(Path path, String tableName) {
 
 private void importIntoOisDatabase(Path path, String tableName) {
     try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
-         InputStream inputStream = Files.newInputStream(path)) {
+         Statement statement = connection.createStatement();
+         InputStream inputStream = Files.newInputStream(path);
+         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
         connection.setAutoCommit(false);
-        BaseConnection baseConnection = connection.unwrap(BaseConnection.class);
-        try (CopyManager copyManager = new CopyManager(baseConnection)) {
-            copyManager.copyIn("COPY ois." + tableName + " (data) FROM STDIN WITH (FORMAT CSV, HEADER)", inputStream);
+
+        // Создаем таблицу с именем файла
+        String createTableSql = "CREATE TABLE ois." + tableName + " (data TEXT)";
+        statement.executeUpdate(createTableSql);
+
+        // Вставляем данные из файла в таблицу
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String insertSql = "INSERT INTO ois." + tableName + " (data) VALUES (?)";
+            PreparedStatement preparedStatement = connection.prepareStatement(insertSql);
+            preparedStatement.setString(1, line);
+            preparedStatement.executeUpdate();
         }
+
         connection.commit();
-        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
+        logger.info("Импортирован файл {} в бд OIS, создана новая таблица {}", path.getFileName(), tableName);
     } catch (SQLException | IOException e) {
         logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
     }
@@ -35,62 +59,10 @@ private void importIntoOisDatabase(Path path, String tableName) {
 
 Основные изменения:
 
-1. Теперь мы используем connection.unwrap(BaseConnection.class) для получения экземпляра BaseConnection из Connection, который мы можем передать в качестве аргумента для CopyManager.
-2. Открытие и закрытие InputStream, Connection и CopyManager по-прежнему находятся в try-with-resources блоках.
+1. Теперь в начале каждого метода создается новая таблица с именем файла в соответствующей базе данных (Core или OIS).
+2. Данные из CSV-файла вставляются в эту таблицу построчно с помощью PreparedStatement.
+3. После завершения импорта данных, транзакция коммитится.
 
-Если вы хотите избежать использования CopyManager и вместо этого пройтись по каждой строке CSV-файла, вы можете использовать следующий подход:
+Этот код должен работать как требуется - создавать новые таблицы с именами файлов и импортировать данные из CSV-файлов в соответствующие базы данных.
 
-private void importIntoCoreDatabase(Path path, String tableName) {
-    try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
-         Statement statement = connection.createStatement();
-         InputStream inputStream = Files.newInputStream(path);
-         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-        connection.setAutoCommit(false);
-        String line;
-        int lineNumber = 0;
-        while ((line = reader.readLine()) != null) {
-            if (lineNumber > 0) { // Пропускаем заголовок
-                String sql = "INSERT INTO core." + tableName + " (data) VALUES (?)";
-                PreparedStatement preparedStatement = connection.prepareStatement(sql);
-                preparedStatement.setString(1, line);
-                preparedStatement.executeUpdate();
-            }
-            lineNumber++;
-        }
-        connection.commit();
-        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
-    }
-}
-
-private void importIntoOisDatabase(Path path, String tableName) {
-
-    try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
-         Statement statement = connection.createStatement();
-         InputStream inputStream = Files.newInputStream(path);
-         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-        connection.setAutoCommit(false);
-        String line;
-        int lineNumber = 0;
-        while ((line = reader.readLine()) != null) {
-            if (lineNumber > 0) { // Пропускаем заголовок
-                String sql = "INSERT INTO ois." + tableName + " (data) VALUES (?)";
-                PreparedStatement preparedStatement = connection.prepareStatement(sql);
-                preparedStatement.setString(1, line);
-                preparedStatement.executeUpdate();
-            }
-            lineNumber++;
-        }
-        connection.commit();
-        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
-    }
-}
-
-В этом случае мы читаем CSV-файл построчно, пропуская заголовок, и вставляем каждую строку в соответствующую таблицу с помощью PreparedStatement.
-
-Выберите тот подход, который больше подходит для ваших требований.
-
-10470 из 16384
+7579 из 16384
