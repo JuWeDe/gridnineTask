@@ -1,167 +1,28 @@
-Беседа № 135: 
+Беседа № 136: 
 Выбрана Ваша роль: Программист
 
-Вот реализация двух методов для импортирования CSV-файлов в базы данных без использования CopyManager:
+Можно сделать это более простым способом, используя встроенные методы Java:
 
-private void importIntoCoreDatabase(Path path, String tableName) {
-    try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
-         Statement statement = connection.createStatement();
-         BufferedReader reader = Files.newBufferedReader(path)) {
-        
-        // Создание таблицы
-        String createTableQuery = createTableQuery(tableName, reader.readLine());
-        statement.executeUpdate(createTableQuery);
-        
-        // Вставка данных
-        String insertQuery = "INSERT INTO core." + tableName + " VALUES (?";
-        for (int i = 1; i < columnCount; i++) {
-            insertQuery += ", ?";
-        }
-        insertQuery += ")";
-        PreparedStatement insertStatement = connection.prepareStatement(insertQuery);
-        
-        String line;
-        while ((line = reader.readLine()) != null) {
-            String[] values = line.split(",");
-            for (int i = 0; i < values.length; i++) {
-                insertStatement.setString(i + 1, values[i]);
-            }
-            insertStatement.executeUpdate();
-        }
-        
-        connection.commit();
-        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
-    }
-}
+String fileName = "ss_ooo_202361.csv";
 
-private void importIntoOisDatabase(Path path, String tableName) {
-    try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
-         Statement statement = connection.createStatement();
-         BufferedReader reader = Files.newBufferedReader(path)) {
-        
-        // Создание таблицы
-        String createTableQuery = createTableQuery(tableName, reader.readLine());
-        statement.executeUpdate(createTableQuery);
-        
-        // Вставка данных
-        String insertQuery = "INSERT INTO ois." + tableName + " VALUES (?";
-        for (int i = 1; i < columnCount; i++) {
-            insertQuery += ", ?";
-        }
-        insertQuery += ")";
-        PreparedStatement insertStatement = connection.prepareStatement(insertQuery);
-        
-        String line;
-        while ((line = reader.readLine()) != null) {
-            String[] values = line.split(",");
-            for (int i = 0; i < values.length; i++) {
-                insertStatement.setString(i + 1, values[i]);
-            }
-            insertStatement.executeUpdate();
-        }
-        
-        connection.commit();
-        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
-    }
-}
+// Получение расширения файла
+String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
+System.out.println("Расширение файла: " + fileExtension);
 
-private String createTableQuery(String tableName, String headerLine) {
-    StringBuilder query = new StringBuilder("CREATE TABLE core." + tableName + " (");
-    String[] columns = headerLine.split(",");
-    columnCount = columns.length;
-    for (int i = 0; i < columns.length; i++) {
-        query.append(columns[i]).append(" VARCHAR(255)");
-        if (i < columns.length - 1) {
-            query.append(", ");
-        }
-    }
-    query.append(")");
-    return query.toString();
-}
+// Получение строки без цифр и расширения
+String stringWithoutDigits = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
+System.out.println("Строка без цифр и расширения: " + stringWithoutDigits);
 
-Основные изменения:
+В этом коде:
 
-1. Вместо CopyManager используется BufferedReader для чтения данных из CSV-файла.
-2. Сначала создается таблица с 
-помощью метода createTableQuery(), который 
+1. Для получения расширения файла мы используем substring(), начиная с последнего индекса точки в строке fileName.
+2. Для получения строки без цифр и расширения мы используем replaceAll() с регулярным выражением "\\d", чтобы удалить все цифры, и затем replace(), чтобы удалить расширение файла.
 
+Вывод этого кода будет таким же, как и в предыдущем примере:
 
+Расширение файла: csv
+Строка без цифр и расширения: ss_ooo_
 
-парсит заголовок CSV-файла и формирует SQL-запрос для создания таблицы
+Это более простой и компактный способ достижения того же результата, без необходимости использования циклов или сложной логики.
 
-Беседа № 135: 
-Выбрана Ваша роль: Программист
-
-Вот методы с использованием CopyManager:
-
-private void importIntoCoreDatabase(Path path, String tableName) {
-    try (Connection connection = DriverManager.getConnection(coreDbUrl, coreDbUsername, coreDbPassword);
-         CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-        
-        // Создание таблицы
-        createTable(connection, tableName, path);
-        
-        // Импортирование данных
-        connection.setAutoCommit(false);
-        copyManager.copyIn("COPY core." + tableName + " FROM STDIN WITH (FORMAT CSV, HEADER)", Files.newInputStream(path));
-        connection.commit();
-        
-        logger.info("Импортирован файл {} в бд Core, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд Core", path.getFileName(), e);
-    }
-}
-
-private void importIntoOisDatabase(Path path, String tableName) {
-    try (Connection connection = DriverManager.getConnection(oisDbUrl, oisDbUsername, oisDbPassword);
-         CopyManager copyManager = new CopyManager((BaseConnection) connection)) {
-        
-        // Создание таблицы
-        createTable(connection, tableName, path);
-        
-        // Импортирование данных
-        connection.setAutoCommit(false);
-        copyManager.copyIn("COPY ois." + tableName + " FROM STDIN WITH (FORMAT CSV, HEADER)", Files.newInputStream(path));
-        connection.commit();
-        
-        logger.info("Импортирован файл {} в бд OIS, добавлена новая таблица {}", path.getFileName(), tableName);
-    } catch (SQLException | IOException e) {
-        logger.error("Ошибка импортирования файла {} в бд OIS ", path.getFileName(), e);
-    }
-}
-
-private void createTable(Connection connection, String tableName, Path path) throws SQLException, IOException {
-    try (Statement statement = connection.createStatement();
-         BufferedReader reader = Files.newBufferedReader(path)) {
-        
-        // Создание таблицы
-        String[] columns = reader.readLine().split(",");
-        StringBuilder createTableQuery = new StringBuilder("CREATE TABLE core." + tableName + " (");
-        for (int i = 0; i < columns.length; i++) {
-            createTableQuery.append(columns[i]).append(" VARCHAR(255)");
-            if (i < columns.length - 1) {
-                createTableQuery.append(", ");
-            }
-        }
-        createTableQuery.append(")");
-        statement.executeUpdate(createTableQuery.toString());
-    }
-}
-
-Основные изменения:
-
-1. Используется метод createTable() для создания таблицы на основе заголовка CSV-файла.
-2. В методах importIntoCoreDatabase() и importIntoOisDatabase() сначала создается таблица, а затто импортируются данные с помощью CopyManager.
-3. Для импортирования данных используется команда COPY ... FROM STDIN WITH (FORMAT CSV, HEADER), которая позволяет эффективно импортировать данные из CSV-файла в базу данных.
-
-Этот подход использует преимущества CopyManager, что может обеспечить более высокую производительность при импортировании больших объемов данных.
-
-2202 из 16384
-
-
-
-.
+813 из 16384
