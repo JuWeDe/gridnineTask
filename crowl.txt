@@ -1,128 +1,100 @@
-Беседа № 136: 
-Выбрана Ваша роль: Программист
+Беседа № 131: 
 
-Чтобы получать параметры из application.yaml, вам нужно использовать @Value аннотацию в вашем классе FolderCleaner. Вот как это можно реализовать:
+Конечно, вот более полный пример реализации, который включает использование Spring Cloud Actuator для управления конфигурацией во время выполнения:
 
-1. Добавьте в файл application.yaml следующие параметры:
+1. Создайте конфигурационный класс ConfigBufferProperties:
 
-cleaner-properties:
-  folderPath: /path/to/watched/directory
-  daysCount: 30
-  schedulerCron: 0 0 0 ? * *
+@Configuration
+@ConfigurationProperties(prefix = "config-buffer")
+@RefreshScope
+public class ConfigBufferProperties {
+    private long delay;
 
-2. Обновите класс FolderCleaner:
-
-package com.example.demo.services;
-
-import com.example.demo.repositories.FileCategoryRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
-
-/**
- * Класс отвечающий за очистку директории с файлами.
- */
-@Service
-public class FolderCleaner {
-    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
-
-    /**
-     * Путь к директории.
-     */
-    @Value("${cleaner-properties.folderPath}")
-    private String watchedDirectoryPath;
-
-    /**
-     * Количество дней, по истечении которых файл будет удален.
-     */
-    @Value("${cleaner-properties.daysCount}")
-    private int daysCount;
-
-    /**
-     * Расписание для запуска очистки директории.
-     */
-    @Value("${cleaner-properties.schedulerCron}")
-    private String schedulerCron;
-
-    /**
-     * Экземпляр класса FileCategoryRepository.
-     */
-    private final FileCategoryRepository fc;
-
-    /**
-     * Конструктор класса FolderCleaner, в который передаются необходимые параметры.
-     *
-     * @param fc Экземпляр класса FileCategoryRepository
-     */
-    public FolderCleaner(FileCategoryRepository fc) {
-        this.fc = fc;
+    public long getDelay() {
+        return delay;
     }
 
-    /**
-     * Метод, выполняющийся по расписанию, который удаляет файлы из папки,
-     * созданные более daysCount дней назад.
-     */
-    @Scheduled(cron = "${cleaner-properties.schedulerCron}")
-    public void cleanFolder() {
-        Path watchedDirectory = Paths.get(watchedDirectoryPath);
-        try {
-            Files.list(watchedDirectory)
-                 .forEach(this::deleteExpiredFile);
-        } catch (IOException e) {
-            logger.error("Ошибка при очистке директории: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Метод, который проверяет, удаляет файл, если он старше daysCount дней.
-     *
-     * @param path путь к файлу
-     */
-    private void deleteExpiredFile(Path path) {
-        String fileExtension = path.getFileName().toString().substring(path.getFileName().toString().lastIndexOf(".") + 1);
-        System.out.println("Расширение файла: " + fileExtension);
-        String fileMask = path.getFileName().toString().replaceAll("\\d", "").replace("." + fileExtension, "");
-        System.out.println("Строка без цифр и расширения: " + fileMask);
-
-        int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
-        System.out.println("Сколько дней может жить файл: " + daysToExpire);
-        if (daysToExpire > 0) {
-            try {
-                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-                Instant creationInstant = attrs.creationTime().toInstant();
-                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
-                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
-
-                if (daysSinceCreation > daysToExpire) {
-                    Files.delete(path);
-                    logger.info("Удален файл {}", path.getFileName());
-                }
-            } catch (IOException e) {
-                logger.error("Ошибка при удалении файла {}: {}", path.getFileName(), e.getMessage());
-            }
-        }
+    public void setDelay(long delay) {
+        this.delay = delay;
     }
 }
 
-В этом обновленном коде:
+Обратите внимание на аннотацию @RefreshScope, которая позволяет автоматически обновлять значения свойств при вызове /actuator/refresh.
 
-1. Добавлены поля @Value для получения параметров из файла application.yaml.
-2. Конструктор принимает только экземпляр FileCategoryRepository.
-3. Метод cleanFolder() использует параметры, полученные из application.yaml.
-4. Метод deleteExpiredFile() использует BasicFileAttributes для получения времени создания файла, а затем вычисляет количество дней с момента создания.
+2. Создайте сервис, который использует ConfigBufferProperties:
 
-Теперь вы можете изменять параметры очистки директории, просто обновляя значения в application.yaml, без необходимости изменять код.
+@Service
+public class YourService {
+    private final ConfigBufferProperties configBufferProperties;
 
-2745 из 16384
+    public YourService(ConfigBufferProperties configBufferProperties) {
+        this.configBufferProperties = configBufferProperties;
+    }
+
+    public void doSomething() {
+        System.out.println("Executing task with delay: " + configBufferProperties.getDelay() + "ms");
+        try {
+            Thread.sleep(configBufferProperties.getDelay());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        System.out.println("Task completed");
+    }
+}
+
+3. Создайте контроллер, который будет предоставлять доступ к конфигурации:
+
+@RestController
+@RequestMapping("/config")
+public class ConfigController {
+    private final ConfigBufferProperties configBufferProperties;
+
+    public ConfigController(ConfigBufferProperties configBufferProperties) {
+        this.configBufferProperties = configBufferProperties;
+    }
+
+    @GetMapping("/delay")
+    public long getDelay() {
+        return configBufferProperties.getDelay();
+    }
+
+    @PostMapping("/delay")
+    public void setDelay(@RequestParam long delay) {
+        configBufferProperties.setDelay(delay);
+    }
+}
+
+4. Создайте файл configBuffer.yaml в папке resources с начальным значением delay:
+
+config-buffer:
+  delay: 10000
+
+5. Включите Actuator в application.properties или application.yml:
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,env,refresh
+
+6. Теперь вы можете запустить ваше Spring Boot приложение:
+
+java -jar your-app.jar
+
+7. Чтобы проверить текущее значение delay, отправьте GET-запрос на /config/delay:
+
+curl http://localhost:8080/config/delay
+
+8. Чтобы изменить значение delay во время выполнения, отправьте POST-запрос на /config/delay с новым значением:
+
+curl -X POST -d "delay=5000" http://localhost:8080/config/delay
+
+9. Чтобы применить изменения, отправьте POST-запрос на /actuator/refresh:
+
+curl -X POST http://localhost:8080/actuator/refresh
+
+После этого ваше приложение будет использовать новое значение delay, которое вы установили.
+
+Этот пример показывает, как вы можете использовать Spring Cloud Actuator для управления конфигурацией во время выполнения, а также предоставляет пользовательский интерфейс для получения и изменения значения delay.
+
+3636 из 16384
