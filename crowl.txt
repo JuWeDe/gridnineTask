@@ -1,28 +1,128 @@
 Беседа № 136: 
 Выбрана Ваша роль: Программист
 
-Можно сделать это более простым способом, используя встроенные методы Java:
+Чтобы получать параметры из application.yaml, вам нужно использовать @Value аннотацию в вашем классе FolderCleaner. Вот как это можно реализовать:
 
-String fileName = "ss_ooo_202361.csv";
+1. Добавьте в файл application.yaml следующие параметры:
 
-// Получение расширения файла
-String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
-System.out.println("Расширение файла: " + fileExtension);
+cleaner-properties:
+  folderPath: /path/to/watched/directory
+  daysCount: 30
+  schedulerCron: 0 0 0 ? * *
 
-// Получение строки без цифр и расширения
-String stringWithoutDigits = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
-System.out.println("Строка без цифр и расширения: " + stringWithoutDigits);
+2. Обновите класс FolderCleaner:
 
-В этом коде:
+package com.example.demo.services;
 
-1. Для получения расширения файла мы используем substring(), начиная с последнего индекса точки в строке fileName.
-2. Для получения строки без цифр и расширения мы используем replaceAll() с регулярным выражением "\\d", чтобы удалить все цифры, и затем replace(), чтобы удалить расширение файла.
+import com.example.demo.repositories.FileCategoryRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
 
-Вывод этого кода будет таким же, как и в предыдущем примере:
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 
-Расширение файла: csv
-Строка без цифр и расширения: ss_ooo_
+/**
+ * Класс отвечающий за очистку директории с файлами.
+ */
+@Service
+public class FolderCleaner {
+    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
-Это более простой и компактный способ достижения того же результата, без необходимости использования циклов или сложной логики.
+    /**
+     * Путь к директории.
+     */
+    @Value("${cleaner-properties.folderPath}")
+    private String watchedDirectoryPath;
 
-813 из 16384
+    /**
+     * Количество дней, по истечении которых файл будет удален.
+     */
+    @Value("${cleaner-properties.daysCount}")
+    private int daysCount;
+
+    /**
+     * Расписание для запуска очистки директории.
+     */
+    @Value("${cleaner-properties.schedulerCron}")
+    private String schedulerCron;
+
+    /**
+     * Экземпляр класса FileCategoryRepository.
+     */
+    private final FileCategoryRepository fc;
+
+    /**
+     * Конструктор класса FolderCleaner, в который передаются необходимые параметры.
+     *
+     * @param fc Экземпляр класса FileCategoryRepository
+     */
+    public FolderCleaner(FileCategoryRepository fc) {
+        this.fc = fc;
+    }
+
+    /**
+     * Метод, выполняющийся по расписанию, который удаляет файлы из папки,
+     * созданные более daysCount дней назад.
+     */
+    @Scheduled(cron = "${cleaner-properties.schedulerCron}")
+    public void cleanFolder() {
+        Path watchedDirectory = Paths.get(watchedDirectoryPath);
+        try {
+            Files.list(watchedDirectory)
+                 .forEach(this::deleteExpiredFile);
+        } catch (IOException e) {
+            logger.error("Ошибка при очистке директории: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Метод, который проверяет, удаляет файл, если он старше daysCount дней.
+     *
+     * @param path путь к файлу
+     */
+    private void deleteExpiredFile(Path path) {
+        String fileExtension = path.getFileName().toString().substring(path.getFileName().toString().lastIndexOf(".") + 1);
+        System.out.println("Расширение файла: " + fileExtension);
+        String fileMask = path.getFileName().toString().replaceAll("\\d", "").replace("." + fileExtension, "");
+        System.out.println("Строка без цифр и расширения: " + fileMask);
+
+        int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
+        System.out.println("Сколько дней может жить файл: " + daysToExpire);
+        if (daysToExpire > 0) {
+            try {
+                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                Instant creationInstant = attrs.creationTime().toInstant();
+                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
+                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
+
+                if (daysSinceCreation > daysToExpire) {
+                    Files.delete(path);
+                    logger.info("Удален файл {}", path.getFileName());
+                }
+            } catch (IOException e) {
+                logger.error("Ошибка при удалении файла {}: {}", path.getFileName(), e.getMessage());
+            }
+        }
+    }
+}
+
+В этом обновленном коде:
+
+1. Добавлены поля @Value для получения параметров из файла application.yaml.
+2. Конструктор принимает только экземпляр FileCategoryRepository.
+3. Метод cleanFolder() использует параметры, полученные из application.yaml.
+4. Метод deleteExpiredFile() использует BasicFileAttributes для получения времени создания файла, а затем вычисляет количество дней с момента создания.
+
+Теперь вы можете изменять параметры очистки директории, просто обновляя значения в application.yaml, без необходимости изменять код.
+
+2745 из 16384
