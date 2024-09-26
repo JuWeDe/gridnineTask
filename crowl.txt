@@ -120,7 +120,11 @@ public class FileImporterService {
                     Path tempFile = Files.createTempFile(null, ".csv");
 
                     try (OutputStream tempOut = Files.newOutputStream(tempFile)) {
-                        archiveStream.transferTo(tempOut);
+                        byte[] buffer = new byte[1024];
+                        int len;
+                        while ((len = archiveStream.read(buffer)) > 0) {
+                            tempOut.write(buffer, 0, len);
+                        }
                     }
 
                     processCsvFile(tempFile, processedDir);
