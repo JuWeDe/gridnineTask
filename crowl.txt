@@ -5,11 +5,12 @@ import org.apache.commons.compress.archivers.ArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
 import org.postgresql.copy.CopyManager;
 import org.postgresql.core.BaseConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import java.io.*;
@@ -18,8 +19,8 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.*;
-import java.util.regex.Pattern;
 
+@Service
 public class FileImporterService {
 
     private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
@@ -29,8 +30,11 @@ public class FileImporterService {
     private final String dbUsername = "postgres";
     private final String dbPassword = "postgres";
 
-    private final String sourceDir = "/path/to/source";
-    private final String processedDir = "/path/to/processed";
+    @Value("${importer-properties.importerFolder}")
+    private String sourceDir;
+
+    @Value("${cleaner-properties.folderPath}")
+    private String processedDir;
 
     public FileImporterService() {
     }
@@ -84,19 +88,11 @@ public class FileImporterService {
         String tableName = getTableNameWithoutExtension(fileName);
 
         try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-
             logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
-            // Определяем разделитель файла
             char delimiter = detectDelimiter(csvFilePath);
-
-            // Создаем таблицу
             createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-
-            // Импортируем данные
             importCsvToDatabase(csvFilePath, tableName, connection, delimiter);
-
-            // Перемещаем файл в директорию для обработанных
             moveFile(csvFilePath, Paths.get(processedDir));
 
             logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
@@ -128,14 +124,12 @@ public class FileImporterService {
                     }
 
                     processCsvFile(tempFile, processedDir);
-
                     Files.deleteIfExists(tempFile);
                 }
             }
         }
 
         moveFile(archiveFilePath, Paths.get(processedDir));
-
         logger.info("Архив {} обработан и перемещен в {}", archiveFilePath, processedDir);
     }
 
