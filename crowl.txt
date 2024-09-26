@@ -1,68 +1,222 @@
-public class FileCategoryRepository {
-    private final DataSource fileCategoriesDataSource;
-    private List<FileCategory> categories;
+package com.example.importer.service;
 
-    public FileCategoryRepository(DataSource fileCategoriesDataSource) {
-        this.fileCategoriesDataSource = fileCategoriesDataSource;
-        cacheCategories();  // можно назвать loadCategories
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.ArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.PostConstruct;
+import java.io.*;
+import java.nio.file.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+import java.util.*;
+import java.util.regex.Pattern;
+
+public class FileImporterService {
+
+    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
+
+    private final String oisDbUrl = "jdbc:postgresql://localhost:5432/ois";
+    private final String coreDbUrl = "jdbc:postgresql://localhost:5432/core";
+    private final String dbUsername = "postgres";
+    private final String dbPassword = "postgres";
+
+    private final String sourceDir = "/path/to/source";
+    private final String processedDir = "/path/to/processed";
+
+    public FileImporterService() {
     }
 
-    private void cacheCategories() {
-        logger.info("Начало загрузки категорий...");
-        categories = selectAllFileCategories();  // сохраняем категории в список
-        logger.info("Загрузка категорий завершена. Всего категорий: {}", categories.size());
-    }
+    @PostConstruct
+    public void watchDirectory() {
+        try {
+            Path sourcePath = Paths.get(sourceDir);
+            WatchService watchService = FileSystems.getDefault().newWatchService();
+            sourcePath.register(watchService, StandardWatchEventKinds.ENTRY_CREATE);
 
-    // Поиск категории по маске имени и расширению файла
-    public FileCategory findByNameMaskAndExtension(String nameMask, String extension) {
-        for (FileCategory category : categories) {
-            if (category.getNameMask().equals(nameMask) && category.getExtensions().equals(extension)) {
-                return category;
-            }
-        }
-        return null;  // если категория не найдена
-    }
-}
+            logger.info("Ожидание новых файлов в директории: {}", sourceDir);
 
+            while (true) {
+                WatchKey key = watchService.take();
 
+                for (WatchEvent<?> event : key.pollEvents()) {
+                    WatchEvent.Kind<?> kind = event.kind();
 
-public class FolderCleaner {
-    private FileCategoryRepository fc;
+                    if (kind == StandardWatchEventKinds.OVERFLOW) {
+                        continue;
+                    }
 
-    // Другие методы...
+                    WatchEvent<Path> ev = (WatchEvent<Path>) event;
+                    Path fileName = ev.context();
+                    Path filePath = sourcePath.resolve(fileName);
 
-    private void deleteExpiredFile(Path path) {
-        String fileName = path.getFileName().toString();
-        logger.debug("Обработка файла: {}", fileName);
+                    logger.info("Обнаружен новый файл: {}", filePath);
 
-        String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
-        String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
-
-        // Поиск категории по маске имени и расширению файла
-        FileCategory fileCategory = fc.findByNameMaskAndExtension(fileMask, fileExtension);
-
-        if (fileCategory != null) {
-            int daysToExpire = fileCategory.getDaysToExpire();
-
-            logger.info("Файл {} имеет срок жизни {} дней", fileName, daysToExpire);
-            try {
-                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-                Instant creationInstant = attrs.creationTime().toInstant();
-                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
-                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
-
-                if (daysSinceCreation > daysToExpire) {
-                    Files.delete(path);
-                    logger.info("Удален файл {}", fileName);
-                } else {
-                    logger.info("Файл {} еще не истек", fileName);
+                    if (Files.isRegularFile(filePath)) {
+                        if (filePath.toString().endsWith(".csv")) {
+                            processCsvFile(filePath, processedDir);
+                        } else if (filePath.toString().endsWith(".zip")) {
+                            processArchive(filePath, processedDir);
+                        }
+                    }
                 }
-            } catch (IOException e) {
-                logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
+
+                boolean valid = key.reset();
+                if (!valid) {
+                    break;
+                }
             }
-        } else {
-            logger.warn("Срок жизни для файла {} не найден", fileName);
+        } catch (Exception e) {
+            logger.error("Ошибка при наблюдении за директорией", e);
         }
     }
-}
 
+    private void processCsvFile(Path csvFilePath, String processedDir) throws Exception {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
+
+        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+
+            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+            // Определяем разделитель файла
+            char delimiter = detectDelimiter(csvFilePath);
+
+            // Создаем таблицу
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+
+            // Импортируем данные
+            importCsvToDatabase(csvFilePath, tableName, connection, delimiter);
+
+            // Перемещаем файл в директорию для обработанных
+            moveFile(csvFilePath, Paths.get(processedDir));
+
+            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
+        } catch (Exception e) {
+            logger.error("Ошибка при обработке файла {}", fileName, e);
+        }
+    }
+
+    private void processArchive(Path archiveFilePath, String processedDir) throws Exception {
+        logger.info("Обрабатываем архив: {}", archiveFilePath);
+
+        try (InputStream fileStream = Files.newInputStream(archiveFilePath);
+             ArchiveInputStream archiveStream = new ZipArchiveInputStream(fileStream)) {
+
+            ArchiveEntry entry;
+            while ((entry = archiveStream.getNextEntry()) != null) {
+                if (entry.isDirectory()) continue;
+
+                String fileName = entry.getName();
+                if (fileName.endsWith(".csv")) {
+                    Path tempFile = Files.createTempFile(null, ".csv");
+
+                    try (OutputStream tempOut = Files.newOutputStream(tempFile)) {
+                        archiveStream.transferTo(tempOut);
+                    }
+
+                    processCsvFile(tempFile, processedDir);
+
+                    Files.deleteIfExists(tempFile);
+                }
+            }
+        }
+
+        moveFile(archiveFilePath, Paths.get(processedDir));
+
+        logger.info("Архив {} обработан и перемещен в {}", archiveFilePath, processedDir);
+    }
+
+    private String getTableNameWithoutExtension(String fileName) {
+        return fileName.substring(0, fileName.lastIndexOf("."));
+    }
+
+    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
+        String[] parts = fileName.split("_");
+        if (parts.length > 1 && parts[1].equalsIgnoreCase("xxx")) {
+            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
+            return DriverManager.getConnection(oisDbUrl, dbUsername, dbPassword);
+        } else {
+            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
+            return DriverManager.getConnection(coreDbUrl, dbUsername, dbPassword);
+        }
+    }
+
+    private char detectDelimiter(Path csvFilePath) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
+            String firstLine = reader.readLine();
+            if (firstLine != null) {
+                if (firstLine.contains(",")) {
+                    return ',';
+                } else if (firstLine.contains(";")) {
+                    return ';';
+                } else if (firstLine.contains("\t")) {
+                    return '\t';
+                } else {
+                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
+                }
+            }
+        }
+        throw new IOException("Не удалось прочитать файл " + csvFilePath);
+    }
+
+    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withDelimiter(delimiter)
+                     .parse(reader)) {
+
+            List<String> headers = new ArrayList<>(csvParser.getHeaderMap().keySet());
+
+            StringBuilder createTableQuery = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+                    .append(tableName)
+                    .append(" (");
+
+            for (int i = 0; i < headers.size(); i++) {
+                createTableQuery.append(headers.get(i).trim()).append(" TEXT");
+                if (i < headers.size() - 1) {
+                    createTableQuery.append(", ");
+                }
+            }
+            createTableQuery.append(");");
+
+            logger.info("Создание таблицы: {}", createTableQuery.toString());
+
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute(createTableQuery.toString());
+            }
+        }
+    }
+
+    private void importCsvToDatabase(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        logger.info("Импорт данных в таблицу {} из файла {}", tableName, csvFilePath);
+
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withDelimiter(delimiter)
+                     .parse(reader)) {
+
+            CopyManager copyManager = new CopyManager((BaseConnection) connection);
+            String copySql = String.format("COPY %s FROM STDIN WITH CSV HEADER DELIMITER '%s'", tableName, delimiter);
+            try (BufferedReader bufferedReader = Files.newBufferedReader(csvFilePath)) {
+                bufferedReader.readLine(); // Пропускаем заголовок
+                copyManager.copyIn(copySql, bufferedReader);
+            }
+        }
+    }
+
+    private void moveFile(Path source, Path targetDir) throws IOException {
+        Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        logger.info("Файл перемещен в {}", targetDir);
+    }
+}
