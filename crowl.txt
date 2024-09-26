@@ -1,3 +1,53 @@
+@Repository
+public class FileCategoryRepository {
+
+    private static final String SELECT_ALL_FILE_CATEGORIES = 
+        "SELECT * FROM file_categories";
+
+    private final DataSource fileCategoriesDataSource;
+    private Map<String, FileCategory> cache = new HashMap<>();
+
+    public FileCategoryRepository(DataSource fileCategoriesDataSource) {
+        this.fileCategoriesDataSource = fileCategoriesDataSource;
+        loadAllCategoriesToCache(); // Загружаем кэш при создании объекта
+    }
+
+    private void loadAllCategoriesToCache() {
+        try (Connection connection = fileCategoriesDataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(SELECT_ALL_FILE_CATEGORIES);
+             ResultSet resultSet = statement.executeQuery()) {
+
+            while (resultSet.next()) {
+                FileCategory fileCategory = new FileCategory();
+                fileCategory.setId(resultSet.getInt("id"));
+                fileCategory.setStatus(resultSet.getString("status"));
+                fileCategory.setDescription(resultSet.getString("description"));
+                fileCategory.setDatabase(resultSet.getString("database"));
+                fileCategory.setStartDate(resultSet.getDate("start_date"));
+                fileCategory.setFinishDate(resultSet.getDate("finish_date"));
+                fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
+                fileCategory.setSeparators(resultSet.getString("separators"));
+                fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
+                fileCategory.setNameMask(resultSet.getString("name_mask"));
+                fileCategory.setExtensions(resultSet.getString("extensions"));
+                fileCategory.setColumns(resultSet.getString("columns"));
+                
+                // Кэшируем запись
+                cache.put(fileCategory.getNameMask() + "|" + fileCategory.getExtensions(), fileCategory);
+            }
+        } catch (SQLException e) {
+            System.err.println("Ошибка при загрузке категорий: " + e.getMessage());
+        }
+    }
+
+    public int selectDaysToExpireByNameMask(String nameMask, String extension) {
+        FileCategory category = cache.get(nameMask + "|" + extension);
+        return (category != null) ? category.getDaysToExpire() : -1;
+    }
+
+    // Дополнительные методы, если необходимо...
+}
+
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
@@ -45,3 +95,4 @@ public class FolderCleaner {
         }
     }
 }
+
