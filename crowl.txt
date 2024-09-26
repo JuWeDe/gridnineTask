@@ -1,110 +1,56 @@
-@Repository
 public class FileCategoryRepository {
-
-    private static final String SELECT_ALL_FILE_CATEGORIES = "SELECT * FROM file_categories";
-    
     private final DataSource fileCategoriesDataSource;
-    private final Map<String, FileCategory> cache = new HashMap<>();
-    private static final Logger logger = LoggerFactory.getLogger(FileCategoryRepository.class);
+    private List<FileCategory> categories;
 
     public FileCategoryRepository(DataSource fileCategoriesDataSource) {
         this.fileCategoriesDataSource = fileCategoriesDataSource;
-        logger.info("Инициализация FileCategoryRepository...");
-        cacheCategories(); // Кэширование категорий при создании объекта
+        cacheCategories();  // можно назвать loadCategories
     }
 
     private void cacheCategories() {
-        logger.info("Начало кэширования категорий...");
-        List<FileCategory> categories = selectAllFileCategories();
+        logger.info("Начало загрузки категорий...");
+        categories = selectAllFileCategories();  // сохраняем категории в список
+        logger.info("Загрузка категорий завершена. Всего категорий: {}", categories.size());
+    }
+
+    // Поиск категории по маске имени и расширению файла
+    public FileCategory findByNameMaskAndExtension(String nameMask, String extension) {
         for (FileCategory category : categories) {
-            cache.put(category.getNameMask() + "|" + category.getExtensions(), category);
-        }
-        logger.info("Кэширование категорий завершено. Всего категорий: {}", cache.size());
-    }
-
-    private List<FileCategory> selectAllFileCategories() {
-        List<FileCategory> categories = new ArrayList<>();
-        logger.info("Выполнение запроса на получение всех категорий из БД...");
-        
-        try (Connection connection = fileCategoriesDataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(SELECT_ALL_FILE_CATEGORIES);
-             ResultSet resultSet = statement.executeQuery()) {
-
-            while (resultSet.next()) {
-                FileCategory fileCategory = new FileCategory();
-                fileCategory.setId(resultSet.getInt("id"));
-                fileCategory.setStatus(resultSet.getString("status"));
-                fileCategory.setDescription(resultSet.getString("description"));
-                fileCategory.setDatabase(resultSet.getString("database"));
-                fileCategory.setStartDate(resultSet.getDate("start_date"));
-                fileCategory.setFinishDate(resultSet.getDate("finish_date"));
-                fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
-                fileCategory.setSeparators(resultSet.getString("separators"));
-                fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
-                fileCategory.setNameMask(resultSet.getString("name_mask"));
-                fileCategory.setExtensions(resultSet.getString("extensions"));
-                fileCategory.setColumns(resultSet.getString("columns"));
-                categories.add(fileCategory);
-                logger.debug("Загружена категория: {}", fileCategory.getNameMask());
+            if (category.getNameMask().equals(nameMask) && category.getExtensions().equals(extension)) {
+                return category;
             }
-        } catch (SQLException e) {
-            logger.error("Ошибка при получении категорий: {}", e.getMessage());
         }
-        return categories;
-    }
-
-    public int selectDaysToExpireByNameMask(String nameMask, String extension) {
-        logger.info("Запрос на получение дней до истечения для маски: {} и расширения: {}", nameMask, extension);
-        FileCategory category = cache.get(nameMask + "|" + extension);
-        if (category != null) {
-            logger.info("Найдено в кэше: {}", category.getDaysToExpire());
-            return category.getDaysToExpire();
-        }
-        logger.warn("Не найдено в кэше. Возвращаем -1.");
-        return -1;
+        return null;  // если категория не найдена
     }
 }
-@Service
+
+
+
 public class FolderCleaner {
-    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
+    private FileCategoryRepository fc;
 
-    @Value("${cleaner-properties.folderPath}")
-    private String watchedDirectoryPath;
-    private final FileCategoryRepository fc;
-
-    public FolderCleaner(FileCategoryRepository fc) {
-        this.fc = fc;
-        logger.info("Инициализация FolderCleaner с путем: {}", watchedDirectoryPath);
-    }
-
-    @Scheduled(cron = "${cleaner-properties.schedulerCron}")
-    public void cleanFolder() {
-        logger.info("Запуск очистки директории...");
-        Path watchedDirectory = Paths.get(watchedDirectoryPath);
-        try {
-            Files.list(watchedDirectory)
-                    .forEach(this::deleteExpiredFile);
-        } catch (IOException e) {
-            logger.error("Ошибка при очистке директории: {}", e.getMessage());
-        }
-    }
+    // Другие методы...
 
     private void deleteExpiredFile(Path path) {
         String fileName = path.getFileName().toString();
         logger.debug("Обработка файла: {}", fileName);
+
         String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
         String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
 
-        int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
-        
-        if (daysToExpire >= 0) {
+        // Поиск категории по маске имени и расширению файла
+        FileCategory fileCategory = fc.findByNameMaskAndExtension(fileMask, fileExtension);
+
+        if (fileCategory != null) {
+            int daysToExpire = fileCategory.getDaysToExpire();
+
             logger.info("Файл {} имеет срок жизни {} дней", fileName, daysToExpire);
             try {
                 BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
                 Instant creationInstant = attrs.creationTime().toInstant();
                 LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
                 long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
-                
+
                 if (daysSinceCreation > daysToExpire) {
                     Files.delete(path);
                     logger.info("Удален файл {}", fileName);
