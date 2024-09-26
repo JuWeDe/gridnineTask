@@ -1,100 +1,68 @@
-Беседа № 131: 
-
-Конечно, вот более полный пример реализации, который включает использование Spring Cloud Actuator для управления конфигурацией во время выполнения:
-
-1. Создайте конфигурационный класс ConfigBufferProperties:
-
-@Configuration
-@ConfigurationProperties(prefix = "config-buffer")
-@RefreshScope
-public class ConfigBufferProperties {
-    private long delay;
-
-    public long getDelay() {
-        return delay;
-    }
-
-    public void setDelay(long delay) {
-        this.delay = delay;
-    }
-}
-
-Обратите внимание на аннотацию @RefreshScope, которая позволяет автоматически обновлять значения свойств при вызове /actuator/refresh.
-
-2. Создайте сервис, который использует ConfigBufferProperties:
-
 @Service
-public class YourService {
-    private final ConfigBufferProperties configBufferProperties;
+public class FolderCleaner {
+    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
-    public YourService(ConfigBufferProperties configBufferProperties) {
-        this.configBufferProperties = configBufferProperties;
+    @Value("${cleaner-properties.folderPath}")
+    private String watchedDirectoryPath;
+    @Value("${cleaner-properties.daysCount}")
+    private int daysCount;
+    private final FileCategoryRepository fc;
+
+    // Кэш для хранения информации о файлах
+    private Map<String, Integer> fileExpirationCache = new HashMap<>();
+
+    public FolderCleaner(FileCategoryRepository fc) {
+        this.fc = fc;
     }
 
-    public void doSomething() {
-        System.out.println("Executing task with delay: " + configBufferProperties.getDelay() + "ms");
-        try {
-            Thread.sleep(configBufferProperties.getDelay());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+    @PostConstruct
+    public void init() {
+        loadFileCategoriesToCache();
+    }
+
+    private void loadFileCategoriesToCache() {
+        // Загрузите данные из БД и заполните кэш
+        // Примерный запрос для извлечения всех необходимых данных
+        // Здесь предполагается, что в БД есть способ получить все уникальные комбинации масок и расширений
+        // В реальном коде нужно будет реализовать соответствующий запрос и обработку
+        List<FileCategory> categories = fc.getAllFileCategories();
+        for (FileCategory category : categories) {
+            fileExpirationCache.put(category.getNameMask() + "|" + category.getExtensions(), category.getDaysToExpire());
         }
-        System.out.println("Task completed");
+    }
+
+    @Scheduled(cron = "${cleaner-properties.schedulerCron}")
+    public void cleanFolder() {
+        Path watchedDirectory = Paths.get(watchedDirectoryPath);
+        try {
+            Files.list(watchedDirectory)
+                    .forEach(this::deleteExpiredFile);
+        } catch (IOException e) {
+            logger.error("Ошибка при очистке директории: {}", e.getMessage());
+        }
+    }
+
+    private void deleteExpiredFile(Path path) {
+        String fileName = path.getFileName().toString();
+        String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
+        String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
+
+        Integer daysToExpire = fileExpirationCache.get(fileMask + "|" + fileExtension);
+        
+        if (daysToExpire != null && daysToExpire >= 0) {
+            try {
+                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                Instant creationInstant = attrs.creationTime().toInstant();
+                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
+                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
+                
+                if (daysSinceCreation > daysToExpire) {
+                    Files.delete(path);
+                    logger.info("Удален файл {}", fileName);
+                }
+            } catch (IOException e) {
+                logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
+            }
+        }
     }
 }
-
-3. Создайте контроллер, который будет предоставлять доступ к конфигурации:
-
-@RestController
-@RequestMapping("/config")
-public class ConfigController {
-    private final ConfigBufferProperties configBufferProperties;
-
-    public ConfigController(ConfigBufferProperties configBufferProperties) {
-        this.configBufferProperties = configBufferProperties;
-    }
-
-    @GetMapping("/delay")
-    public long getDelay() {
-        return configBufferProperties.getDelay();
-    }
-
-    @PostMapping("/delay")
-    public void setDelay(@RequestParam long delay) {
-        configBufferProperties.setDelay(delay);
-    }
-}
-
-4. Создайте файл configBuffer.yaml в папке resources с начальным значением delay:
-
-config-buffer:
-  delay: 10000
-
-5. Включите Actuator в application.properties или application.yml:
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,env,refresh
-
-6. Теперь вы можете запустить ваше Spring Boot приложение:
-
-java -jar your-app.jar
-
-7. Чтобы проверить текущее значение delay, отправьте GET-запрос на /config/delay:
-
-curl http://localhost:8080/config/delay
-
-8. Чтобы изменить значение delay во время выполнения, отправьте POST-запрос на /config/delay с новым значением:
-
-curl -X POST -d "delay=5000" http://localhost:8080/config/delay
-
-9. Чтобы применить изменения, отправьте POST-запрос на /actuator/refresh:
-
-curl -X POST http://localhost:8080/actuator/refresh
-
-После этого ваше приложение будет использовать новое значение delay, которое вы установили.
-
-Этот пример показывает, как вы можете использовать Spring Cloud Actuator для управления конфигурацией во время выполнения, а также предоставляет пользовательский интерфейс для получения и изменения значения delay.
-
-3636 из 16384
