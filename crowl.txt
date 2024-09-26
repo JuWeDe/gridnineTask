@@ -1,34 +1,56 @@
+@Repository
+public class FileCategoryRepository {
+
+    private static final String SELECTDAYS_TO_EXPIRE_BY_NAME_MASK = "SELECT days_to_expire FROM file_categories WHERE name_mask LIKE ? AND extensions = ?";
+    private static final String SELECTFILE_CATEGORY_BY_NAME_MASK = "SELECT * FROM file_categories WHERE name_mask = ? AND extensions = ?";
+    
+    private final DataSource fileCategoriesDataSource;
+    private Map<String, Integer> cache = new HashMap<>();
+
+    public FileCategoryRepository(DataSource fileCategoriesDataSource) {
+        this.fileCategoriesDataSource = fileCategoriesDataSource;
+        loadAllCategoriesToCache(); // Загружаем кэш при создании объекта
+    }
+
+    private void loadAllCategoriesToCache() {
+        try (Connection connection = fileCategoriesDataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT name_mask, extensions, days_to_expire FROM file_categories");
+             ResultSet resultSet = statement.executeQuery()) {
+            
+            while (resultSet.next()) {
+                String nameMask = resultSet.getString("name_mask");
+                String extensions = resultSet.getString("extensions");
+                int daysToExpire = resultSet.getInt("days_to_expire");
+                cache.put(nameMask + "|" + extensions, daysToExpire);
+            }
+        } catch (SQLException e) {
+            // Логирование ошибки
+        }
+    }
+
+    public int selectDaysToExpireByNameMask(String nameMask, String extension) {
+        return cache.getOrDefault(nameMask + "|" + extension, -1);
+    }
+
+    public int selectFileCategoryByNameMask(String nameMask, String extension) {
+        // В этом методе также можно использовать кэш
+        // Для получения категории, если необходимо
+        return 0; // Замените на нужную логику
+    }
+    
+    // Остальные методы остаются без изменений...
+}
+
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
     @Value("${cleaner-properties.folderPath}")
     private String watchedDirectoryPath;
-    @Value("${cleaner-properties.daysCount}")
-    private int daysCount;
     private final FileCategoryRepository fc;
-
-    // Кэш для хранения информации о файлах
-    private Map<String, Integer> fileExpirationCache = new HashMap<>();
 
     public FolderCleaner(FileCategoryRepository fc) {
         this.fc = fc;
-    }
-
-    @PostConstruct
-    public void init() {
-        loadFileCategoriesToCache();
-    }
-
-    private void loadFileCategoriesToCache() {
-        // Загрузите данные из БД и заполните кэш
-        // Примерный запрос для извлечения всех необходимых данных
-        // Здесь предполагается, что в БД есть способ получить все уникальные комбинации масок и расширений
-        // В реальном коде нужно будет реализовать соответствующий запрос и обработку
-        List<FileCategory> categories = fc.getAllFileCategories();
-        for (FileCategory category : categories) {
-            fileExpirationCache.put(category.getNameMask() + "|" + category.getExtensions(), category.getDaysToExpire());
-        }
     }
 
     @Scheduled(cron = "${cleaner-properties.schedulerCron}")
@@ -47,9 +69,9 @@ public class FolderCleaner {
         String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
         String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
 
-        Integer daysToExpire = fileExpirationCache.get(fileMask + "|" + fileExtension);
+        int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
         
-        if (daysToExpire != null && daysToExpire >= 0) {
+        if (daysToExpire >= 0) {
             try {
                 BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
                 Instant creationInstant = attrs.creationTime().toInstant();
@@ -66,3 +88,4 @@ public class FolderCleaner {
         }
     }
 }
+
