@@ -1,42 +1,18 @@
 @Repository
 public class FileCategoryRepository {
 
-    private static final String SELECT_ALL_FILE_CATEGORIES = 
-        "SELECT * FROM file_categories";
-
     private final DataSource fileCategoriesDataSource;
     private Map<String, FileCategory> cache = new HashMap<>();
 
     public FileCategoryRepository(DataSource fileCategoriesDataSource) {
         this.fileCategoriesDataSource = fileCategoriesDataSource;
-        loadAllCategoriesToCache(); // Загружаем кэш при создании объекта
+        cacheCategories(); // Загружаем кэш при создании объекта
     }
 
-    private void loadAllCategoriesToCache() {
-        try (Connection connection = fileCategoriesDataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement(SELECT_ALL_FILE_CATEGORIES);
-             ResultSet resultSet = statement.executeQuery()) {
-
-            while (resultSet.next()) {
-                FileCategory fileCategory = new FileCategory();
-                fileCategory.setId(resultSet.getInt("id"));
-                fileCategory.setStatus(resultSet.getString("status"));
-                fileCategory.setDescription(resultSet.getString("description"));
-                fileCategory.setDatabase(resultSet.getString("database"));
-                fileCategory.setStartDate(resultSet.getDate("start_date"));
-                fileCategory.setFinishDate(resultSet.getDate("finish_date"));
-                fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
-                fileCategory.setSeparators(resultSet.getString("separators"));
-                fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
-                fileCategory.setNameMask(resultSet.getString("name_mask"));
-                fileCategory.setExtensions(resultSet.getString("extensions"));
-                fileCategory.setColumns(resultSet.getString("columns"));
-                
-                // Кэшируем запись
-                cache.put(fileCategory.getNameMask() + "|" + fileCategory.getExtensions(), fileCategory);
-            }
-        } catch (SQLException e) {
-            System.err.println("Ошибка при загрузке категорий: " + e.getMessage());
+    private void cacheCategories() {
+        List<FileCategory> categories = selectAllFileCategories();
+        for (FileCategory category : categories) {
+            cache.put(category.getNameMask() + "|" + category.getExtensions(), category);
         }
     }
 
@@ -45,55 +21,42 @@ public class FileCategoryRepository {
         return (category != null) ? category.getDaysToExpire() : -1;
     }
 
-    // Дополнительные методы, если необходимо...
-}
-
-@Service
-public class FolderCleaner {
-    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
-
-    @Value("${cleaner-properties.folderPath}")
-    private String watchedDirectoryPath;
-    private final FileCategoryRepository fc;
-
-    public FolderCleaner(FileCategoryRepository fc) {
-        this.fc = fc;
-    }
-
-    @Scheduled(cron = "${cleaner-properties.schedulerCron}")
-    public void cleanFolder() {
-        Path watchedDirectory = Paths.get(watchedDirectoryPath);
-        try {
-            Files.list(watchedDirectory)
-                    .forEach(this::deleteExpiredFile);
-        } catch (IOException e) {
-            logger.error("Ошибка при очистке директории: {}", e.getMessage());
-        }
-    }
-
-    private void deleteExpiredFile(Path path) {
-        String fileName = path.getFileName().toString();
-        String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
-        String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
-
-        int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
-        
-        if (daysToExpire >= 0) {
-            try {
-                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-                Instant creationInstant = attrs.creationTime().toInstant();
-                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
-                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
-                
-                if (daysSinceCreation > daysToExpire) {
-                    Files.delete(path);
-                    logger.info("Удален файл {}", fileName);
-                }
-            } catch (IOException e) {
-                logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
-            }
-        }
+    public List<FileCategory> selectAllFileCategories() {
+        // Метод уже обновлен выше
     }
 }
 
+
+
+
+
+public List<FileCategory> selectAllFileCategories() {
+    List<FileCategory> categories = new ArrayList<>();
+    String query = "SELECT * FROM file_categories"; // Убедитесь, что это правильный запрос
+
+    try (Connection connection = fileCategoriesDataSource.getConnection();
+         PreparedStatement statement = connection.prepareStatement(query);
+         ResultSet resultSet = statement.executeQuery()) {
+
+        while (resultSet.next()) {
+            FileCategory fileCategory = new FileCategory();
+            fileCategory.setId(resultSet.getInt("id"));
+            fileCategory.setStatus(resultSet.getString("status"));
+            fileCategory.setDescription(resultSet.getString("description"));
+            fileCategory.setDatabase(resultSet.getString("database"));
+            fileCategory.setStartDate(resultSet.getDate("start_date"));
+            fileCategory.setFinishDate(resultSet.getDate("finish_date"));
+            fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
+            fileCategory.setSeparators(resultSet.getString("separators"));
+            fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
+            fileCategory.setNameMask(resultSet.getString("name_mask"));
+            fileCategory.setExtensions(resultSet.getString("extensions"));
+            fileCategory.setColumns(resultSet.getString("columns"));
+            categories.add(fileCategory);
+        }
+    } catch (SQLException e) {
+        System.err.println("Ошибка при получении категорий: " + e.getMessage());
+    }
+    return categories;
+}
 
