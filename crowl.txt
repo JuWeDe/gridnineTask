@@ -1,46 +1,3 @@
-@Repository
-public class FileCategoryRepository {
-
-    private static final String SELECTDAYS_TO_EXPIRE_BY_NAME_MASK = "SELECT days_to_expire FROM file_categories WHERE name_mask LIKE ? AND extensions = ?";
-    private static final String SELECTFILE_CATEGORY_BY_NAME_MASK = "SELECT * FROM file_categories WHERE name_mask = ? AND extensions = ?";
-    
-    private final DataSource fileCategoriesDataSource;
-    private Map<String, Integer> cache = new HashMap<>();
-
-    public FileCategoryRepository(DataSource fileCategoriesDataSource) {
-        this.fileCategoriesDataSource = fileCategoriesDataSource;
-        loadAllCategoriesToCache(); // Загружаем кэш при создании объекта
-    }
-
-    private void loadAllCategoriesToCache() {
-        try (Connection connection = fileCategoriesDataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement("SELECT name_mask, extensions, days_to_expire FROM file_categories");
-             ResultSet resultSet = statement.executeQuery()) {
-            
-            while (resultSet.next()) {
-                String nameMask = resultSet.getString("name_mask");
-                String extensions = resultSet.getString("extensions");
-                int daysToExpire = resultSet.getInt("days_to_expire");
-                cache.put(nameMask + "|" + extensions, daysToExpire);
-            }
-        } catch (SQLException e) {
-            // Логирование ошибки
-        }
-    }
-
-    public int selectDaysToExpireByNameMask(String nameMask, String extension) {
-        return cache.getOrDefault(nameMask + "|" + extension, -1);
-    }
-
-    public int selectFileCategoryByNameMask(String nameMask, String extension) {
-        // В этом методе также можно использовать кэш
-        // Для получения категории, если необходимо
-        return 0; // Замените на нужную логику
-    }
-    
-    // Остальные методы остаются без изменений...
-}
-
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
@@ -88,4 +45,3 @@ public class FolderCleaner {
         }
     }
 }
-
