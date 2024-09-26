@@ -9,10 +9,12 @@ public class FileCategoryRepository {
 
     public FileCategoryRepository(DataSource fileCategoriesDataSource) {
         this.fileCategoriesDataSource = fileCategoriesDataSource;
+        logger.info("Инициализация FileCategoryRepository...");
         cacheCategories(); // Кэширование категорий при создании объекта
     }
 
     private void cacheCategories() {
+        logger.info("Начало кэширования категорий...");
         List<FileCategory> categories = selectAllFileCategories();
         for (FileCategory category : categories) {
             cache.put(category.getNameMask() + "|" + category.getExtensions(), category);
@@ -22,6 +24,8 @@ public class FileCategoryRepository {
 
     private List<FileCategory> selectAllFileCategories() {
         List<FileCategory> categories = new ArrayList<>();
+        logger.info("Выполнение запроса на получение всех категорий из БД...");
+        
         try (Connection connection = fileCategoriesDataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement(SELECT_ALL_FILE_CATEGORIES);
              ResultSet resultSet = statement.executeQuery()) {
@@ -41,6 +45,7 @@ public class FileCategoryRepository {
                 fileCategory.setExtensions(resultSet.getString("extensions"));
                 fileCategory.setColumns(resultSet.getString("columns"));
                 categories.add(fileCategory);
+                logger.debug("Загружена категория: {}", fileCategory.getNameMask());
             }
         } catch (SQLException e) {
             logger.error("Ошибка при получении категорий: {}", e.getMessage());
@@ -49,12 +54,16 @@ public class FileCategoryRepository {
     }
 
     public int selectDaysToExpireByNameMask(String nameMask, String extension) {
+        logger.info("Запрос на получение дней до истечения для маски: {} и расширения: {}", nameMask, extension);
         FileCategory category = cache.get(nameMask + "|" + extension);
-        return (category != null) ? category.getDaysToExpire() : -1;
+        if (category != null) {
+            logger.info("Найдено в кэше: {}", category.getDaysToExpire());
+            return category.getDaysToExpire();
+        }
+        logger.warn("Не найдено в кэше. Возвращаем -1.");
+        return -1;
     }
 }
-
-
 @Service
 public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
@@ -65,10 +74,12 @@ public class FolderCleaner {
 
     public FolderCleaner(FileCategoryRepository fc) {
         this.fc = fc;
+        logger.info("Инициализация FolderCleaner с путем: {}", watchedDirectoryPath);
     }
 
     @Scheduled(cron = "${cleaner-properties.schedulerCron}")
     public void cleanFolder() {
+        logger.info("Запуск очистки директории...");
         Path watchedDirectory = Paths.get(watchedDirectoryPath);
         try {
             Files.list(watchedDirectory)
@@ -80,12 +91,14 @@ public class FolderCleaner {
 
     private void deleteExpiredFile(Path path) {
         String fileName = path.getFileName().toString();
+        logger.debug("Обработка файла: {}", fileName);
         String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
         String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
 
         int daysToExpire = fc.selectDaysToExpireByNameMask(fileMask, fileExtension);
         
         if (daysToExpire >= 0) {
+            logger.info("Файл {} имеет срок жизни {} дней", fileName, daysToExpire);
             try {
                 BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
                 Instant creationInstant = attrs.creationTime().toInstant();
@@ -95,10 +108,15 @@ public class FolderCleaner {
                 if (daysSinceCreation > daysToExpire) {
                     Files.delete(path);
                     logger.info("Удален файл {}", fileName);
+                } else {
+                    logger.info("Файл {} еще не истек", fileName);
                 }
             } catch (IOException e) {
                 logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
             }
+        } else {
+            logger.warn("Срок жизни для файла {} не найден", fileName);
         }
     }
 }
+
