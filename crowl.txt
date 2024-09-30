@@ -1,6 +1,6 @@
-package com.example.service;
+package com.example.demo.service;
 
-import com.example.model.FileCategory;
+import com.example.demo.entities.FileCategory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -10,6 +10,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,46 +28,55 @@ public class FileCategoryCacheService {
 
     @PostConstruct
     public void initializeCache() {
-        logger.info("Начало кэширования категорий...");
-
+        logger.info("Начало кэширования данных из таблицы file_categories...");
+        
         try (Connection connection = dataSource.getConnection();
              PreparedStatement statement = connection.prepareStatement("SELECT * FROM file_categories");
              ResultSet resultSet = statement.executeQuery()) {
 
+            List<FileCategory> categories = new ArrayList<>();
             while (resultSet.next()) {
-                String nameMask = resultSet.getString("name_mask");
-                String extensions = resultSet.getString("extensions");
-                int daysToExpire = resultSet.getInt("days_to_expire");
-                String description = resultSet.getString("description"); // Поле description
-                boolean isActive = resultSet.getBoolean("is_active");     // Поле is_active
+                FileCategory fileCategory = new FileCategory();
+                fileCategory.setId(resultSet.getInt("id"));
+                fileCategory.setStatus(resultSet.getString("status"));
+                fileCategory.setDescription(resultSet.getString("description"));
+                fileCategory.setDatabase(resultSet.getString("database"));
+                fileCategory.setStartDate(resultSet.getDate("start_date"));
+                fileCategory.setFinishDate(resultSet.getDate("finish_date"));
+                fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
+                fileCategory.setSeparators(resultSet.getString("separators"));
+                fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
+                fileCategory.setNameMask(resultSet.getString("name_mask"));
+                fileCategory.setExtensions(resultSet.getString("extensions"));
+                fileCategory.setColumns(resultSet.getString("columns"));
 
-                FileCategory category = new FileCategory(nameMask, extensions, daysToExpire, description, isActive);
-                cache.put(nameMask + "|" + extensions, category);
+                // Кэшируем данные с ключом, основанным на name_mask и extensions
+                cache.put(fileCategory.getNameMask() + "|" + fileCategory.getExtensions(), fileCategory);
+                categories.add(fileCategory);
             }
 
-            logger.info("Кэширование категорий завершено. Всего категорий: {}", cache.size());
+            logger.info("Кэширование завершено. Всего категорий закэшировано: {}", categories.size());
 
         } catch (Exception e) {
-            logger.error("Ошибка при кэшировании категорий", e);
+            logger.error("Ошибка при кэшировании данных: ", e);
         }
     }
 
-    public FileCategory getCategoryByMaskAndExtension(String nameMask, String extension) {
-        return cache.get(nameMask + "|" + extension);
+    // Получение категории из кэша по nameMask и extensions
+    public FileCategory getCategoryByMaskAndExtension(String nameMask, String extensions) {
+        return cache.get(nameMask + "|" + extensions);
     }
 
+    // Получение всех закэшированных категорий
     public List<FileCategory> getAllCategories() {
-        return List.copyOf(cache.values());
+        return new ArrayList<>(cache.values());
     }
 }
 
+package com.example.demo.cleaner;
 
-folder cleaner 
-
-package com.example.cleaner;
-
-import com.example.model.FileCategory;
-import com.example.service.FileCategoryCacheService;
+import com.example.demo.entities.FileCategory;
+import com.example.demo.service.FileCategoryCacheService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
