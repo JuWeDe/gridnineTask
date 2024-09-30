@@ -1,5 +1,6 @@
 package com.example.service;
 
+import com.example.model.FileCategory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,15 +30,17 @@ public class FileCategoryCacheService {
         logger.info("Начало кэширования категорий...");
 
         try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement("SELECT name_mask, extensions, days_to_expire FROM file_categories");
+             PreparedStatement statement = connection.prepareStatement("SELECT * FROM file_categories");
              ResultSet resultSet = statement.executeQuery()) {
 
             while (resultSet.next()) {
                 String nameMask = resultSet.getString("name_mask");
                 String extensions = resultSet.getString("extensions");
                 int daysToExpire = resultSet.getInt("days_to_expire");
+                String description = resultSet.getString("description"); // Поле description
+                boolean isActive = resultSet.getBoolean("is_active");     // Поле is_active
 
-                FileCategory category = new FileCategory(nameMask, extensions, daysToExpire);
+                FileCategory category = new FileCategory(nameMask, extensions, daysToExpire, description, isActive);
                 cache.put(nameMask + "|" + extensions, category);
             }
 
@@ -62,6 +65,7 @@ folder cleaner
 
 package com.example.cleaner;
 
+import com.example.model.FileCategory;
 import com.example.service.FileCategoryCacheService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -119,3 +123,4 @@ public class FolderCleaner {
         }
     }
 }
+
