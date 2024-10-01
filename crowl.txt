@@ -1,136 +1,177 @@
-package com.example.demo.service;
+package com.example.demo.services;
 
-import com.example.demo.entities.FileCategory;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import com.example.demo.configurations.ParametersManager;
 
-import javax.annotation.PostConstruct;
-import javax.sql.DataSource;
+import java.io.*;
+import java.nio.file.*;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class FileCategoryCacheService {
+public class FileImporterService {
 
-    private static final Logger logger = LoggerFactory.getLogger(FileCategoryCacheService.class);
+    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
 
-    private final DataSource dataSource;
-    private final ConcurrentHashMap<String, FileCategory> cache = new ConcurrentHashMap<>();
+    private final ParametersManager parametersManager;
 
-    public FileCategoryCacheService(DataSource dataSource) {
-        this.dataSource = dataSource;
+    @Value("${importer-properties.importerFolder}")
+    private String sourceDir;
+
+    @Value("${cleaner-properties.folderPath}")
+    private String processedDir;
+
+    public FileImporterService(ParametersManager parametersManager) {
+        this.parametersManager = parametersManager;
     }
 
-    @PostConstruct
-    public void initializeCache() {
-        logger.info("Начало кэширования данных из таблицы file_categories...");
-        
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement("SELECT * FROM file_categories");
-             ResultSet resultSet = statement.executeQuery()) {
-
-            List<FileCategory> categories = new ArrayList<>();
-            while (resultSet.next()) {
-                FileCategory fileCategory = new FileCategory();
-                fileCategory.setId(resultSet.getInt("id"));
-                fileCategory.setStatus(resultSet.getString("status"));
-                fileCategory.setDescription(resultSet.getString("description"));
-                fileCategory.setDatabase(resultSet.getString("database"));
-                fileCategory.setStartDate(resultSet.getDate("start_date"));
-                fileCategory.setFinishDate(resultSet.getDate("finish_date"));
-                fileCategory.setDaysToExpire(resultSet.getInt("days_to_expire"));
-                fileCategory.setSeparators(resultSet.getString("separators"));
-                fileCategory.setColumnsCount(resultSet.getInt("columns_count"));
-                fileCategory.setNameMask(resultSet.getString("name_mask"));
-                fileCategory.setExtensions(resultSet.getString("extensions"));
-                fileCategory.setColumns(resultSet.getString("columns"));
-
-                // Кэшируем данные с ключом, основанным на name_mask и extensions
-                cache.put(fileCategory.getNameMask() + "|" + fileCategory.getExtensions(), fileCategory);
-                categories.add(fileCategory);
+    @Scheduled(fixedRate = 10000)  // Проверка каждые 10 секунд
+    public void watchDirectory() {
+        try {
+            Path sourcePath = Paths.get(sourceDir);
+            if (!Files.exists(sourcePath)) {
+                logger.warn("Директория {} не существует", sourceDir);
+                return;
             }
 
-            logger.info("Кэширование завершено. Всего категорий закэшировано: {}", categories.size());
-
+            Files.list(sourcePath)
+                    .filter(Files::isRegularFile)
+                    .forEach(filePath -> {
+                        try {
+                            logger.info("Обнаружен новый файл: {}", filePath);
+                            if (filePath.toString().endsWith(".csv")) {
+                                processCsvFile(filePath, processedDir);
+                            } else if (filePath.toString().endsWith(".zip")) {
+                                processArchive(filePath, processedDir);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Ошибка при обработке файла {}", filePath, e);
+                        }
+                    });
         } catch (Exception e) {
-            logger.error("Ошибка при кэшировании данных: ", e);
+            logger.error("Ошибка при наблюдении за директорией", e);
         }
     }
 
-    // Получение категории из кэша по nameMask и extensions
-    public FileCategory getCategoryByMaskAndExtension(String nameMask, String extensions) {
-        return cache.get(nameMask + "|" + extensions);
+    private void processCsvFile(Path csvFilePath, String processedDir) throws Exception {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
+
+        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+            char delimiter = detectDelimiter(csvFilePath);
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            importCsvToDatabase(csvFilePath, tableName, connection, delimiter);
+            moveFile(csvFilePath, Paths.get(processedDir));
+
+            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
+        } catch (Exception e) {
+            logger.error("Ошибка при обработке файла {}", fileName, e);
+        }
     }
 
-    // Получение всех закэшированных категорий
-    public List<FileCategory> getAllCategories() {
-        return new ArrayList<>(cache.values());
-    }
-}
+    private void processArchive(Path archiveFilePath, String processedDir) throws Exception {
+        logger.info("Обрабатываем архив: {}", archiveFilePath);
 
-package com.example.demo.cleaner;
+        try (InputStream fileStream = Files.newInputStream(archiveFilePath)) {
+            // Логика для распаковки архива
+        }
 
-import com.example.demo.entities.FileCategory;
-import com.example.demo.service.FileCategoryCacheService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
-
-@Service
-public class FolderCleaner {
-
-    private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
-    private final FileCategoryCacheService fileCategoryCacheService;
-
-    public FolderCleaner(FileCategoryCacheService fileCategoryCacheService) {
-        this.fileCategoryCacheService = fileCategoryCacheService;
+        moveFile(archiveFilePath, Paths.get(processedDir));
+        logger.info("Архив {} обработан и перемещен в {}", archiveFilePath, processedDir);
     }
 
-    public void deleteExpiredFile(Path path) {
-        String fileName = path.getFileName().toString();
-        logger.debug("Обработка файла: {}", fileName);
+    private String getTableNameWithoutExtension(String fileName) {
+        return fileName.substring(0, fileName.lastIndexOf("."));
+    }
 
-        String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
-        String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
+    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
+        String[] parts = fileName.split("_");
+        String dbUrl = parametersManager.getH2DbUrl();
+        String dbUsername = parametersManager.getH2DbUsername();
+        String dbPassword = parametersManager.getH2DbPassword();
 
-        // Используем кэшированные данные из FileCategoryCacheService
-        FileCategory category = fileCategoryCacheService.getCategoryByMaskAndExtension(fileMask, fileExtension);
-
-        if (category != null) {
-            int daysToExpire = category.getDaysToExpire();
-            logger.info("Файл {} имеет срок жизни {} дней", fileName, daysToExpire);
-
-            try {
-                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-                Instant creationInstant = attrs.creationTime().toInstant();
-                LocalDateTime creationTime = LocalDateTime.ofInstant(creationInstant, ZoneId.systemDefault());
-                long daysSinceCreation = ChronoUnit.DAYS.between(creationTime, LocalDateTime.now());
-
-                if (daysSinceCreation > daysToExpire) {
-                    Files.delete(path);
-                    logger.info("Удален файл {}", fileName);
-                } else {
-                    logger.info("Файл {} еще не истек", fileName);
-                }
-            } catch (IOException e) {
-                logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
-            }
+        if (parts.length > 1 && parts[1].equalsIgnoreCase("ois")) {
+            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
         } else {
-            logger.warn("Срок жизни для файла {} не найден", fileName);
+            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
+        }
+        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
+    }
+
+    private char detectDelimiter(Path csvFilePath) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
+            String firstLine = reader.readLine();
+            if (firstLine != null) {
+                if (firstLine.contains(",")) {
+                    return ',';
+                } else if (firstLine.contains(";")) {
+                    return ';';
+                } else if (firstLine.contains("\t")) {
+                    return '\t';
+                } else {
+                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
+                }
+            }
+        }
+        throw new IOException("Не удалось прочитать файл " + csvFilePath);
+    }
+
+    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withDelimiter(delimiter)
+                     .parse(reader)) {
+
+            List<String> headers = new ArrayList<>(csvParser.getHeaderMap().keySet());
+
+            StringBuilder createTableQuery = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+                    .append(tableName)
+                    .append(" (");
+
+            for (int i = 0; i < headers.size(); i++) {
+                createTableQuery.append(headers.get(i).trim()).append(" TEXT");
+                if (i < headers.size() - 1) {
+                    createTableQuery.append(", ");
+                }
+            }
+            createTableQuery.append(");");
+
+            logger.info("Создание таблицы: {}", createTableQuery.toString());
+
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute(createTableQuery.toString());
+            }
         }
     }
-}
 
+    private void importCsvToDatabase(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        logger.info("Импорт данных в таблицу {} из файла {}", tableName, csvFilePath);
+
+        CopyManager copyManager = new CopyManager((BaseConnection) connection);
+
+        String copySql = String.format("COPY %s FROM STDIN WITH CSV HEADER DELIMITER '%s'", tableName, delimiter);
+        try (BufferedReader bufferedReader = Files.newBufferedReader(csvFilePath)) {
+            bufferedReader.readLine();  // Пропускаем заголовок
+            copyManager.copyIn(copySql, bufferedReader);
+        }
+    }
+
+    private void moveFile(Path source, Path targetDir) throws IOException {
+        Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        logger.info("Файл перемещен в {}", targetDir);
+    }
+}
