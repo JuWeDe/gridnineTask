@@ -1,174 +1,81 @@
-package com.example.demo.services;
+package com.example.demo.service;
 
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.postgresql.copy.CopyManager;
-import org.postgresql.core.BaseConnection;
+import com.example.demo.entities.FileIteration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import com.example.demo.configurations.ParametersManager;
 
-import java.io.*;
-import java.nio.file.*;
+import javax.annotation.PostConstruct;
+import javax.sql.DataSource;
 import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.Statement;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class FileImporterService {
+public class FileIterationCacheService {
 
-    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
+    private static final Logger logger = LoggerFactory.getLogger(FileIterationCacheService.class);
 
-    private final ParametersManager parametersManager;
+    private final DataSource dataSource;
+    private final ConcurrentHashMap<Integer, FileIteration> cache = new ConcurrentHashMap<>();
 
-    private final String sourceDir;
-    private final String processedDir;
-
-    public FileImporterService(ParametersManager parametersManager,
-                               @Value("${importer-properties.importerFolder}") String sourceDir,
-                               @Value("${cleaner-properties.folderPath}") String processedDir) {
-        this.parametersManager = parametersManager;
-        this.sourceDir = sourceDir;
-        this.processedDir = processedDir;
+    public FileIterationCacheService(DataSource dataSource) {
+        this.dataSource = dataSource;
     }
 
-    @Scheduled(fixedRate = 10000)  // Проверка каждые 10 секунд
-    public void watchDirectory() {
-        try {
-            Path sourcePath = Paths.get(sourceDir);
-            if (!Files.exists(sourcePath)) {
-                logger.warn("Директория {} не существует", sourceDir);
-                return;
+    @PostConstruct
+    public void initializeCache() {
+        logger.info("Начало кэширования данных из таблицы file_iterations...");
+
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement("SELECT * FROM file_iterations");
+             ResultSet resultSet = statement.executeQuery()) {
+
+            List<FileIteration> iterations = new ArrayList<>();
+            while (resultSet.next()) {
+                FileIteration fileIteration = new FileIteration();
+                fileIteration.setId(resultSet.getInt("id"));
+                fileIteration.setCategoryId(resultSet.getInt("category_id"));
+                fileIteration.setName(resultSet.getString("name"));
+                fileIteration.setArrivedAt(resultSet.getTimestamp("arrived_at"));
+                fileIteration.setDestination(resultSet.getString("destination"));
+                fileIteration.setState(resultSet.getString("state"));
+                fileIteration.setFileSize(resultSet.getLong("file_size"));
+                fileIteration.setArchiveSize(resultSet.getLong("archive_size"));
+                fileIteration.setArchiveName(resultSet.getString("archive_name"));
+                fileIteration.setProcessingStart(resultSet.getTimestamp("processing_start"));
+                fileIteration.setProcessingEnd(resultSet.getTimestamp("processing_end"));
+                fileIteration.setRows(resultSet.getInt("rows"));
+
+                // Кэшируем данные с ключом, основанным на ID итерации
+                cache.put(fileIteration.getId(), fileIteration);
+                iterations.add(fileIteration);
             }
 
-            Files.list(sourcePath)
-                    .filter(Files::isRegularFile)
-                    .forEach(filePath -> {
-                        try {
-                            logger.info("Обнаружен новый файл: {}", filePath);
-                            if (filePath.toString().endsWith(".csv")) {
-                                processCsvFile(filePath);
-                            }
-                        } catch (Exception e) {
-                            logger.error("Ошибка при обработке файла {}", filePath, e);
-                        }
-                    });
+            logger.info("Кэширование завершено. Всего итераций закэшировано: {}", iterations.size());
+
         } catch (Exception e) {
-            logger.error("Ошибка при наблюдении за директорией", e);
+            logger.error("Ошибка при кэшировании данных: ", e);
         }
     }
 
-    private void processCsvFile(Path csvFilePath) throws Exception {
-        String fileName = csvFilePath.getFileName().toString();
-        String tableName = getTableNameWithoutExtension(fileName);
-
-        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
-
-            char delimiter = detectDelimiter(csvFilePath);
-            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-            importCsvToDatabase(csvFilePath, tableName, connection, delimiter);
-            moveFile(csvFilePath, Paths.get(processedDir));
-
-            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
-        } catch (Exception e) {
-            logger.error("Ошибка при обработке файла {}", fileName, e);
-        }
+    // Получение итерации по ID из кэша
+    public FileIteration getIterationById(int id) {
+        return cache.get(id);
     }
 
-    private String getTableNameWithoutExtension(String fileName) {
-        return fileName.substring(0, fileName.lastIndexOf("."));
+    // Получение всех закэшированных итераций
+    public List<FileIteration> getAllIterations() {
+        return new ArrayList<>(cache.values());
     }
 
-    /**
-     * Выбор подключения к базе данных на основе имени файла.
-     * Файлы с "ois" в имени идут в OIS базу, остальные - в CORE.
-     */
-    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
-        String dbUrl;
-        String dbUsername;
-        String dbPassword;
-
-        if (fileName.toLowerCase().contains("ois")) {
-            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
-            dbUrl = parametersManager.getOisDbUrl();
-            dbUsername = parametersManager.getDbOisUsername();
-            dbPassword = parametersManager.getDbOisPassword();
-        } else {
-            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
-            dbUrl = parametersManager.getCoreDbUrl();
-            dbUsername = parametersManager.getDbCoreUsername();
-            dbPassword = parametersManager.getDbCorePassword();
-        }
-
-        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
-    }
-
-    private char detectDelimiter(Path csvFilePath) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
-            String firstLine = reader.readLine();
-            if (firstLine != null) {
-                if (firstLine.contains(",")) {
-                    return ',';
-                } else if (firstLine.contains(";")) {
-                    return ';';
-                } else if (firstLine.contains("\t")) {
-                    return '\t';
-                } else {
-                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
-                }
-            }
-        }
-        throw new IOException("Не удалось прочитать файл " + csvFilePath);
-    }
-
-    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = CSVFormat.DEFAULT
-                     .withFirstRecordAsHeader()
-                     .withDelimiter(delimiter)
-                     .parse(reader)) {
-
-            List<String> headers = new ArrayList<>(csvParser.getHeaderMap().keySet());
-
-            StringBuilder createTableQuery = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-                    .append(tableName)
-                    .append(" (");
-
-            for (int i = 0; i < headers.size(); i++) {
-                createTableQuery.append(headers.get(i).trim()).append(" TEXT");
-                if (i < headers.size() - 1) {
-                    createTableQuery.append(", ");
-                }
-            }
-            createTableQuery.append(");");
-
-            logger.info("Создание таблицы: {}", createTableQuery.toString());
-
-            try (Statement stmt = connection.createStatement()) {
-                stmt.execute(createTableQuery.toString());
-            }
-        }
-    }
-
-    private void importCsvToDatabase(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-        logger.info("Импорт данных в таблицу {} из файла {}", tableName, csvFilePath);
-
-        CopyManager copyManager = new CopyManager((BaseConnection) connection);
-
-        String copySql = String.format("COPY %s FROM STDIN WITH CSV HEADER DELIMITER '%s'", tableName, delimiter);
-        try (BufferedReader bufferedReader = Files.newBufferedReader(csvFilePath)) {
-            bufferedReader.readLine();  // Пропускаем заголовок
-            copyManager.copyIn(copySql, bufferedReader);
-        }
-    }
-
-    private void moveFile(Path source, Path targetDir) throws IOException {
-        Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
-        logger.info("Файл перемещен в {}", targetDir);
+    // Метод для ручной очистки кэша (при необходимости)
+    public void clearCache() {
+        cache.clear();
+        logger.info("Кэш file_iterations очищен.");
     }
 }
