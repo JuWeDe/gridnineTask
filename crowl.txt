@@ -6,7 +6,6 @@ import org.postgresql.copy.CopyManager;
 import org.postgresql.core.BaseConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import com.example.demo.configurations.ParametersManager;
@@ -26,14 +25,15 @@ public class FileImporterService {
 
     private final ParametersManager parametersManager;
 
-    @Value("${importer-properties.importerFolder}")
-    private String sourceDir;
+    private final String sourceDir;
+    private final String processedDir;
 
-    @Value("${cleaner-properties.folderPath}")
-    private String processedDir;
-
-    public FileImporterService(ParametersManager parametersManager) {
+    public FileImporterService(ParametersManager parametersManager,
+                               @Value("${importer-properties.importerFolder}") String sourceDir,
+                               @Value("${cleaner-properties.folderPath}") String processedDir) {
         this.parametersManager = parametersManager;
+        this.sourceDir = sourceDir;
+        this.processedDir = processedDir;
     }
 
     @Scheduled(fixedRate = 10000)  // Проверка каждые 10 секунд
@@ -51,9 +51,7 @@ public class FileImporterService {
                         try {
                             logger.info("Обнаружен новый файл: {}", filePath);
                             if (filePath.toString().endsWith(".csv")) {
-                                processCsvFile(filePath, processedDir);
-                            } else if (filePath.toString().endsWith(".zip")) {
-                                processArchive(filePath, processedDir);
+                                processCsvFile(filePath);
                             }
                         } catch (Exception e) {
                             logger.error("Ошибка при обработке файла {}", filePath, e);
@@ -64,7 +62,7 @@ public class FileImporterService {
         }
     }
 
-    private void processCsvFile(Path csvFilePath, String processedDir) throws Exception {
+    private void processCsvFile(Path csvFilePath) throws Exception {
         String fileName = csvFilePath.getFileName().toString();
         String tableName = getTableNameWithoutExtension(fileName);
 
@@ -82,32 +80,31 @@ public class FileImporterService {
         }
     }
 
-    private void processArchive(Path archiveFilePath, String processedDir) throws Exception {
-        logger.info("Обрабатываем архив: {}", archiveFilePath);
-
-        try (InputStream fileStream = Files.newInputStream(archiveFilePath)) {
-            // Логика для распаковки архива
-        }
-
-        moveFile(archiveFilePath, Paths.get(processedDir));
-        logger.info("Архив {} обработан и перемещен в {}", archiveFilePath, processedDir);
-    }
-
     private String getTableNameWithoutExtension(String fileName) {
         return fileName.substring(0, fileName.lastIndexOf("."));
     }
 
+    /**
+     * Выбор подключения к базе данных на основе имени файла.
+     * Файлы с "ois" в имени идут в OIS базу, остальные - в CORE.
+     */
     private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
-        String[] parts = fileName.split("_");
-        String dbUrl = parametersManager.getH2DbUrl();
-        String dbUsername = parametersManager.getH2DbUsername();
-        String dbPassword = parametersManager.getH2DbPassword();
+        String dbUrl;
+        String dbUsername;
+        String dbPassword;
 
-        if (parts.length > 1 && parts[1].equalsIgnoreCase("ois")) {
+        if (fileName.toLowerCase().contains("ois")) {
             logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
+            dbUrl = parametersManager.getOisDbUrl();
+            dbUsername = parametersManager.getDbOisUsername();
+            dbPassword = parametersManager.getDbOisPassword();
         } else {
             logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
+            dbUrl = parametersManager.getCoreDbUrl();
+            dbUsername = parametersManager.getDbCoreUsername();
+            dbPassword = parametersManager.getDbCorePassword();
         }
+
         return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
     }
 
