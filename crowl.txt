@@ -1,3 +1,18 @@
+public long getCleanerDelay() {
+    return this.cleanerDelay;
+}
+
+public String getWatchedDirectoryPath() {
+    return this.watchedDirectoryPath;
+}
+
+public int getDaysToExpire() {
+    return this.daysToExpire;
+}
+
+
+
+
 @EventListener(ApplicationReadyEvent.class)
 public void initializeUpdateParameters() {
     // Запуск таймера для обновления параметров один раз при старте приложения
