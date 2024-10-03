@@ -1,6 +1,5 @@
 package com.example.demo.services;
 
-import com.example.demo.configurations.ParametersManager;
 import com.example.demo.entities.FileCategory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +26,6 @@ public class FolderCleaner {
     private static final Logger logger = LoggerFactory.getLogger(FolderCleaner.class);
 
     private final CacheService cacheService;
-    private final ParametersManager parametersManager;
 
     private String watchedDirectoryPath;
     private long cleanerDelay;
@@ -37,24 +35,29 @@ public class FolderCleaner {
     /**
      * Конструктор класса FolderCleaner.
      * @param cacheService Экземпляр CacheService.
-     * @param parametersManager Менеджер параметров для получения обновленных данных.
      */
-    public FolderCleaner(CacheService cacheService, ParametersManager parametersManager) {
+    public FolderCleaner(CacheService cacheService) {
         this.cacheService = cacheService;
-        this.parametersManager = parametersManager;
-        startCleaningProcess(); // Запуск процесса очистки
     }
 
     /**
      * Метод для перезапуска таймера очистки с новыми параметрами.
      */
-    public void startCleaningProcess() {
-        loadParameters();
+    public void startCleaningProcess(String watchedDirectoryPath, long cleanerDelay, int daysToExpire) {
+        // Обновляем параметры
+        this.watchedDirectoryPath = watchedDirectoryPath;
+        this.cleanerDelay = cleanerDelay;
+        this.daysToExpire = daysToExpire;
 
+        logger.info("Запущен процесс очистки: watchedDirectoryPath = {}, cleanerDelay = {}, daysToExpire = {}",
+                watchedDirectoryPath, cleanerDelay, daysToExpire);
+
+        // Останавливаем существующий таймер, если он есть
         if (cleanerTimer != null) {
             cleanerTimer.cancel();
         }
 
+        // Запускаем новый таймер
         cleanerTimer = new Timer("FolderCleanerTimer");
 
         TimerTask task = new TimerTask() {
@@ -64,18 +67,6 @@ public class FolderCleaner {
         };
 
         cleanerTimer.scheduleAtFixedRate(task, 0, cleanerDelay);
-    }
-
-    /**
-     * Метод для загрузки параметров из ParametersManager.
-     */
-    public void loadParameters() {
-        this.watchedDirectoryPath = parametersManager.getCleanerFolder();
-        this.cleanerDelay = parametersManager.getFolderCleanerDelay();
-        this.daysToExpire = parametersManager.getDaysToExpire();
-
-        logger.info("Параметры FolderCleaner обновлены: watchedDirectoryPath = {}, cleanerDelay = {}, daysToExpire = {}",
-                watchedDirectoryPath, cleanerDelay, daysToExpire);
     }
 
     /**
@@ -127,8 +118,6 @@ public class FolderCleaner {
 
 
 
-
-
 package com.example.demo.configurations;
 
 import com.example.demo.CacheService;
@@ -158,6 +147,8 @@ public class ParametersManager {
     private String cleanerFolder;
     private int daysToExpire;
 
+    private long refreshRate;
+
     public ParametersManager(
             CacheService cacheService,
             FileMonitor fileMonitor,
@@ -171,45 +162,40 @@ public class ParametersManager {
 
     @EventListener(ApplicationReadyEvent.class)
     public void updateParameters() {
-        try {
-            Parameters parameters = cacheService.getParameters();
+        Parameters parameters = cacheService.getParameters();
 
-            // Обновляем параметры
-            updateParameter("folderCleanerDelay", this.folderCleanerDelay, parameters.getFolderCleanerDelay());
-            updateParameter("cleanerFolder", this.cleanerFolder, parameters.getCleanerFolder());
-            updateParameter("daysToExpire", this.daysToExpire, parameters.getDaysToExpire());
+        // Обновляем параметры
+        refreshRate = parameters.getRefreshRate();
+        folderCleanerDelay = parameters.getFolderCleanerDelay();
+        cleanerFolder = parameters.getCleanerFolder();
+        daysToExpire = parameters.getDaysToExpire();
 
-            // Перезапуск FolderCleaner с новыми параметрами
-            folderCleaner.startCleaningProcess();
+        // Обновляем FolderCleaner с новыми параметрами
+        folderCleaner.startCleaningProcess(cleanerFolder, folderCleanerDelay, daysToExpire);
 
-            TimerTask task = new TimerTask() {
-                public void run() {
-                    updateParameters();
-                }
-            };
-            Timer timer = new Timer("ParameterUpdateTimer");
-            timer.schedule(task, parameters.getRefreshRate());
-        } catch (Exception e) {
-            logger.error("Ошибка при обновлении параметров: ", e);
-        }
+        // Обновляем FileMonitor и FileValidator
+        updateFileMonitor(parameters);
+        updateFileValidator(parameters);
+
+        // Планируем периодическое обновление параметров
+        TimerTask task = new TimerTask() {
+            public void run() {
+                updateParameters();
+            }
+        };
+        Timer timer = new Timer("ParameterUpdateTimer");
+        timer.schedule(task, refreshRate);
     }
 
-    private void updateParameter(String paramName, Object oldValue, Object newValue) {
-        if (!oldValue.equals(newValue)) {
-            logger.info("Параметр {} изменен: {} -> {}", paramName, oldValue, newValue);
-        }
+    private void updateFileMonitor(Parameters parameters) {
+        fileMonitor.stopMonitor();
+        fileMonitor.scanFolder(parameters.getFileMonitorFolder(), parameters.getFileMonitorDelay());
     }
 
-    public String getCleanerFolder() {
-        return cleanerFolder;
-    }
-
-    public long getFolderCleanerDelay() {
-        return folderCleanerDelay;
-    }
-
-    public int getDaysToExpire() {
-        return daysToExpire;
+    private void updateFileValidator(Parameters parameters) {
+        fileValidator.setDateFormat(parameters.getFileValidatorDateMask());
     }
 }
+
+
 
