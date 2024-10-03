@@ -1,139 +1,211 @@
-package com.example.demo.service;
+package com.example.demo.services;
 
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import com.example.demo.configurations.ParametersManager;
 
-import javax.sql.DataSource;
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
+import java.nio.file.*;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.Statement;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
+/**
+ * Сервис для импортирования данных их csv файлов в бд Ois или Core
+ */
 @Service
 public class FileImporterService {
-
     private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
-    private final DataSource dataSource;
-    private static final int BATCH_SIZE = 1000;  // размер батча
+    private final ParametersManager parametersManager;
+    private final String sourceDir;
+    private final String processedDir;
+    private static final int BATCH_SIZE = 1000;  // Размер батча для загрузки данных
 
-    public FileImporterService(DataSource dataSource) {
-        this.dataSource = dataSource;
+    public FileImporterService(ParametersManager parametersManager,
+                               @Value("${importer-properties.importerFolder}") String sourceDir,
+                               @Value("${cleaner-properties.folderPath}") String processedDir) {
+        this.parametersManager = parametersManager;
+        this.sourceDir = sourceDir;
+        this.processedDir = processedDir;
     }
 
-    public void importCsvToDatabase(String filePath) throws Exception {
-        String tableName = extractTableName(filePath);
-
-        try (Connection connection = dataSource.getConnection()) {
-            // Читаем заголовки файла (первую строку)
-            List<String> headers = getCsvHeaders(filePath);
-
-            // Проверяем наличие таблицы
-            if (!tableExists(connection, tableName)) {
-                // Создаем таблицу
-                createTable(connection, tableName, headers);
-            } else {
-                // Проверяем совпадение заголовков
-                if (!validateTableColumns(connection, tableName, headers)) {
-                    throw new RuntimeException("Заголовки CSV не соответствуют существующей таблице: " + tableName);
-                }
+    @Scheduled(fixedRate = 10000)  // Проверка каждые 10 секунд
+    public void watchDirectory() {
+        try {
+            Path sourcePath = Paths.get(sourceDir);
+            if (!Files.exists(sourcePath)) {
+                logger.warn("Директория {} не существует", sourceDir);
+                return;
             }
 
-            // Загружаем данные батчами
-            insertDataBatch(filePath, connection, tableName, headers);
+            Files.list(sourcePath)
+                    .filter(Files::isRegularFile)
+                    .forEach(filePath -> {
+                        try {
+                            logger.info("Обнаружен новый файл: {}", filePath);
+                            if (filePath.toString().endsWith(".csv")) {
+                                processCsvFile(filePath);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Ошибка при обработке файла {}", filePath, e);
+                        }
+                    });
+        } catch (Exception e) {
+            logger.error("Ошибка при наблюдении за директорией", e);
         }
     }
 
-    // Извлечение имени таблицы из пути файла (удаление цифр)
-    private String extractTableName(String filePath) {
-        String fileName = filePath.substring(filePath.lastIndexOf("/") + 1, filePath.lastIndexOf("."));
-        return fileName.replaceAll("\\d+", ""); // Удаляем все цифры из имени
-    }
+    private void processCsvFile(Path csvFilePath) throws Exception {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
 
-    // Получение заголовков из CSV-файла
-    private List<String> getCsvHeaders(String filePath) throws Exception {
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
-            String headerLine = reader.readLine(); // Читаем первую строку (заголовки)
-            return Arrays.stream(headerLine.split(","))
-                    .map(String::trim)
-                    .collect(Collectors.toList());
+        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+            char delimiter = detectDelimiter(csvFilePath);
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+            moveFile(csvFilePath, Paths.get(processedDir));
+
+            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
+        } catch (Exception e) {
+            logger.error("Ошибка при обработке файла {}", fileName, e);
         }
     }
 
-    // Проверка, существует ли таблица в базе данных
-    private boolean tableExists(Connection connection, String tableName) throws Exception {
-        try (ResultSet resultSet = connection.getMetaData().getTables(null, null, tableName, null)) {
-            return resultSet.next();
+    private String getTableNameWithoutExtension(String fileName) {
+        String nameWithoutExtension = fileName.substring(0, fileName.lastIndexOf("."));
+        return nameWithoutExtension.replaceAll("\\d+", "");  // Удаляем цифры из имени файла
+    }
+
+    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
+        String dbUrl;
+        String dbUsername;
+        String dbPassword;
+
+        if (fileName.toLowerCase().contains("ois")) {
+            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
+            dbUrl = parametersManager.getOisDbUrl();
+            dbUsername = parametersManager.getDbOisUsername();
+            dbPassword = parametersManager.getDbOisPassword();
+        } else {
+            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
+            dbUrl = parametersManager.getCoreDbUrl();
+            dbUsername = parametersManager.getDbCoreUsername();
+            dbPassword = parametersManager.getDbCorePassword();
+        }
+
+        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
+    }
+
+    private char detectDelimiter(Path csvFilePath) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
+            String firstLine = reader.readLine();
+            if (firstLine != null) {
+                if (firstLine.contains(",")) {
+                    return ',';
+                } else if (firstLine.contains(";")) {
+                    return ';';
+                } else if (firstLine.contains("\t")) {
+                    return '\t';
+                } else {
+                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
+                }
+            }
+        }
+        throw new IOException("Не удалось прочитать файл " + csvFilePath);
+    }
+
+    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withDelimiter(delimiter)
+                     .parse(reader)) {
+
+            List<String> headers = new ArrayList<>(csvParser.getHeaderMap().keySet());
+
+            StringBuilder createTableQuery = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+                    .append(tableName)
+                    .append(" (");
+
+            for (int i = 0; i < headers.size(); i++) {
+                createTableQuery.append(headers.get(i).trim()).append(" TEXT");
+                if (i < headers.size() - 1) {
+                    createTableQuery.append(", ");
+                }
+            }
+            createTableQuery.append(");");
+
+            logger.info("Создание таблицы: {}", createTableQuery);
+
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute(createTableQuery.toString());
+            }
         }
     }
 
-    // Создание таблицы на основе заголовков CSV
-    private void createTable(Connection connection, String tableName, List<String> headers) throws Exception {
+    private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        logger.info("Импорт данных в таблицу {} из файла {}", tableName, csvFilePath);
+
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withDelimiter(delimiter)
+                     .parse(reader)) {
+
+            List<String> headers = new ArrayList<>(csvParser.getHeaderMap().keySet());
+            String insertQuery = generateInsertSQL(tableName, headers);
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(insertQuery)) {
+                int count = 0;
+
+                for (CSVRecord record : csvParser) {
+                    for (int i = 0; i < headers.size(); i++) {
+                        preparedStatement.setString(i + 1, record.get(i));
+                    }
+                    preparedStatement.addBatch();
+
+                    if (++count % BATCH_SIZE == 0) {
+                        preparedStatement.executeBatch();
+                    }
+                }
+
+                preparedStatement.executeBatch();  // Выполняем оставшиеся записи
+            }
+        }
+    }
+
+    private String generateInsertSQL(String tableName, List<String> headers) {
         String columns = headers.stream()
-                .map(header -> header + " VARCHAR(255)") // Все колонки как VARCHAR для простоты
+                .map(String::trim)
                 .collect(Collectors.joining(", "));
 
-        String createTableSQL = String.format("CREATE TABLE %s (%s)", tableName, columns);
-        try (Statement statement = connection.createStatement()) {
-            statement.execute(createTableSQL);
-            logger.info("Создана таблица: " + tableName);
-        }
-    }
-
-    // Проверка совпадения колонок существующей таблицы с заголовками CSV
-    private boolean validateTableColumns(Connection connection, String tableName, List<String> headers) throws Exception {
-        try (ResultSet resultSet = connection.getMetaData().getColumns(null, null, tableName, null)) {
-            List<String> tableColumns = new ArrayList<>();
-            while (resultSet.next()) {
-                tableColumns.add(resultSet.getString("COLUMN_NAME"));
-            }
-
-            return headers.equals(tableColumns);
-        }
-    }
-
-    // Вставка данных в таблицу батчами
-    private void insertDataBatch(String filePath, Connection connection, String tableName, List<String> headers) throws Exception {
-        String insertSQL = generateInsertSQL(tableName, headers);
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL);
-             BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
-
-            // Пропускаем первую строку (заголовки)
-            reader.readLine();
-
-            String line;
-            int count = 0;
-
-            while ((line = reader.readLine()) != null) {
-                String[] values = line.split(",");
-                for (int i = 0; i < values.length; i++) {
-                    preparedStatement.setString(i + 1, values[i].trim());
-                }
-                preparedStatement.addBatch();
-
-                if (++count % BATCH_SIZE == 0) {
-                    preparedStatement.executeBatch();
-                }
-            }
-
-            // Выполняем оставшиеся записи
-            preparedStatement.executeBatch();
-            logger.info("Данные успешно загружены в таблицу: " + tableName);
-        }
-    }
-
-    // Генерация SQL-запроса для вставки данных
-    private String generateInsertSQL(String tableName, List<String> headers) {
-        String columns = String.join(", ", headers);
         String placeholders = headers.stream()
                 .map(header -> "?")
                 .collect(Collectors.joining(", "));
 
         return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
+    }
+
+    private void moveFile(Path source, Path targetDir) {
+        try {
+            Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
+        }
+        logger.info("Файл перемещен в {}", targetDir);
     }
 }
