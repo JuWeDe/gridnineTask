@@ -1,81 +1,139 @@
 package com.example.demo.service;
 
-import com.example.demo.entities.FileIteration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
 import javax.sql.DataSource;
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.Timestamp;
-import java.util.ArrayList;
+import java.sql.Statement;
+import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
-public class FileIterationCacheService {
+public class FileImporterService {
 
-    private static final Logger logger = LoggerFactory.getLogger(FileIterationCacheService.class);
-
+    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
     private final DataSource dataSource;
-    private final ConcurrentHashMap<Integer, FileIteration> cache = new ConcurrentHashMap<>();
+    private static final int BATCH_SIZE = 1000;  // размер батча
 
-    public FileIterationCacheService(DataSource dataSource) {
+    public FileImporterService(DataSource dataSource) {
         this.dataSource = dataSource;
     }
 
-    @PostConstruct
-    public void initializeCache() {
-        logger.info("Начало кэширования данных из таблицы file_iterations...");
+    public void importCsvToDatabase(String filePath) throws Exception {
+        String tableName = extractTableName(filePath);
 
-        try (Connection connection = dataSource.getConnection();
-             PreparedStatement statement = connection.prepareStatement("SELECT * FROM file_iterations");
-             ResultSet resultSet = statement.executeQuery()) {
+        try (Connection connection = dataSource.getConnection()) {
+            // Читаем заголовки файла (первую строку)
+            List<String> headers = getCsvHeaders(filePath);
 
-            List<FileIteration> iterations = new ArrayList<>();
-            while (resultSet.next()) {
-                FileIteration fileIteration = new FileIteration();
-                fileIteration.setId(resultSet.getInt("id"));
-                fileIteration.setCategoryId(resultSet.getInt("category_id"));
-                fileIteration.setName(resultSet.getString("name"));
-                fileIteration.setArrivedAt(resultSet.getTimestamp("arrived_at"));
-                fileIteration.setDestination(resultSet.getString("destination"));
-                fileIteration.setState(resultSet.getString("state"));
-                fileIteration.setFileSize(resultSet.getLong("file_size"));
-                fileIteration.setArchiveSize(resultSet.getLong("archive_size"));
-                fileIteration.setArchiveName(resultSet.getString("archive_name"));
-                fileIteration.setProcessingStart(resultSet.getTimestamp("processing_start"));
-                fileIteration.setProcessingEnd(resultSet.getTimestamp("processing_end"));
-                fileIteration.setRows(resultSet.getInt("rows"));
-
-                // Кэшируем данные с ключом, основанным на ID итерации
-                cache.put(fileIteration.getId(), fileIteration);
-                iterations.add(fileIteration);
+            // Проверяем наличие таблицы
+            if (!tableExists(connection, tableName)) {
+                // Создаем таблицу
+                createTable(connection, tableName, headers);
+            } else {
+                // Проверяем совпадение заголовков
+                if (!validateTableColumns(connection, tableName, headers)) {
+                    throw new RuntimeException("Заголовки CSV не соответствуют существующей таблице: " + tableName);
+                }
             }
 
-            logger.info("Кэширование завершено. Всего итераций закэшировано: {}", iterations.size());
-
-        } catch (Exception e) {
-            logger.error("Ошибка при кэшировании данных: ", e);
+            // Загружаем данные батчами
+            insertDataBatch(filePath, connection, tableName, headers);
         }
     }
 
-    // Получение итерации по ID из кэша
-    public FileIteration getIterationById(int id) {
-        return cache.get(id);
+    // Извлечение имени таблицы из пути файла (удаление цифр)
+    private String extractTableName(String filePath) {
+        String fileName = filePath.substring(filePath.lastIndexOf("/") + 1, filePath.lastIndexOf("."));
+        return fileName.replaceAll("\\d+", ""); // Удаляем все цифры из имени
     }
 
-    // Получение всех закэшированных итераций
-    public List<FileIteration> getAllIterations() {
-        return new ArrayList<>(cache.values());
+    // Получение заголовков из CSV-файла
+    private List<String> getCsvHeaders(String filePath) throws Exception {
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String headerLine = reader.readLine(); // Читаем первую строку (заголовки)
+            return Arrays.stream(headerLine.split(","))
+                    .map(String::trim)
+                    .collect(Collectors.toList());
+        }
     }
 
-    // Метод для ручной очистки кэша (при необходимости)
-    public void clearCache() {
-        cache.clear();
-        logger.info("Кэш file_iterations очищен.");
+    // Проверка, существует ли таблица в базе данных
+    private boolean tableExists(Connection connection, String tableName) throws Exception {
+        try (ResultSet resultSet = connection.getMetaData().getTables(null, null, tableName, null)) {
+            return resultSet.next();
+        }
+    }
+
+    // Создание таблицы на основе заголовков CSV
+    private void createTable(Connection connection, String tableName, List<String> headers) throws Exception {
+        String columns = headers.stream()
+                .map(header -> header + " VARCHAR(255)") // Все колонки как VARCHAR для простоты
+                .collect(Collectors.joining(", "));
+
+        String createTableSQL = String.format("CREATE TABLE %s (%s)", tableName, columns);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(createTableSQL);
+            logger.info("Создана таблица: " + tableName);
+        }
+    }
+
+    // Проверка совпадения колонок существующей таблицы с заголовками CSV
+    private boolean validateTableColumns(Connection connection, String tableName, List<String> headers) throws Exception {
+        try (ResultSet resultSet = connection.getMetaData().getColumns(null, null, tableName, null)) {
+            List<String> tableColumns = new ArrayList<>();
+            while (resultSet.next()) {
+                tableColumns.add(resultSet.getString("COLUMN_NAME"));
+            }
+
+            return headers.equals(tableColumns);
+        }
+    }
+
+    // Вставка данных в таблицу батчами
+    private void insertDataBatch(String filePath, Connection connection, String tableName, List<String> headers) throws Exception {
+        String insertSQL = generateInsertSQL(tableName, headers);
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL);
+             BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+
+            // Пропускаем первую строку (заголовки)
+            reader.readLine();
+
+            String line;
+            int count = 0;
+
+            while ((line = reader.readLine()) != null) {
+                String[] values = line.split(",");
+                for (int i = 0; i < values.length; i++) {
+                    preparedStatement.setString(i + 1, values[i].trim());
+                }
+                preparedStatement.addBatch();
+
+                if (++count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+                }
+            }
+
+            // Выполняем оставшиеся записи
+            preparedStatement.executeBatch();
+            logger.info("Данные успешно загружены в таблицу: " + tableName);
+        }
+    }
+
+    // Генерация SQL-запроса для вставки данных
+    private String generateInsertSQL(String tableName, List<String> headers) {
+        String columns = String.join(", ", headers);
+        String placeholders = headers.stream()
+                .map(header -> "?")
+                .collect(Collectors.joining(", "));
+
+        return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
     }
 }
