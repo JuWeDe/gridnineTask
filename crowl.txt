@@ -1,3 +1,4 @@
+package com.example.demo.services;
 
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -9,24 +10,31 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import com.example.demo.configurations.ParametersManager;
 
-import java.io.*;
+import javax.annotation.PreDestroy;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.nio.file.*;
 import java.sql.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
 public class FileImporterService {
-
     private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
     private final ParametersManager parametersManager;
     private final String sourceDir;
     private final String processedDir;
     private static final int BATCHSIZE = 1000;
 
-    // Пул потоков для асинхронной обработки файлов
     private final ExecutorService executorService;
+    private final ConcurrentHashMap<String, Boolean> processingFiles; // Для отслеживания состояния файлов
 
     public FileImporterService(ParametersManager parametersManager,
                                @Value("${importer-properties.importerFolder}") String sourceDir,
@@ -34,10 +42,11 @@ public class FileImporterService {
         this.parametersManager = parametersManager;
         this.sourceDir = sourceDir;
         this.processedDir = processedDir;
-        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()); // Пул потоков по числу ядер
+        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        this.processingFiles = new ConcurrentHashMap<>(); // Инициализация карты
     }
 
-    @Scheduled(fixedRate = 10000) // Запуск каждые 10 секунд
+    @Scheduled(fixedRate = 10000)
     public void watchDirectory() {
         try {
             Path sourcePath = Paths.get(sourceDir);
@@ -48,15 +57,17 @@ public class FileImporterService {
 
             Files.list(sourcePath)
                     .filter(Files::isRegularFile)
+                    .filter(filePath -> !processingFiles.containsKey(filePath.toString())) // Фильтрация уже обработанных файлов
                     .forEach(filePath -> {
                         logger.info("Обнаружен новый файл: {}", filePath);
                         if (filePath.toString().endsWith(".csv")) {
-                            // Асинхронная обработка каждого файла
+                            processingFiles.put(filePath.toString(), true); // Отметка файла как обрабатываемого
                             CompletableFuture.runAsync(() -> processCsvFile(filePath), executorService)
                                     .exceptionally(ex -> {
                                         logger.error("Ошибка при обработке файла {}", filePath, ex);
                                         return null;
-                                    });
+                                    })
+                                    .whenComplete((result, ex) -> processingFiles.remove(filePath.toString())); // Удаляем из отслеживания после обработки
                         }
                     });
         } catch (Exception e) {
@@ -73,14 +84,10 @@ public class FileImporterService {
 
             char delimiter = detectDelimiter(csvFilePath);
 
-            // Синхронизированное создание таблицы
-            synchronized (this) {
-                createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-            }
-
+            // Создание таблицы
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
             // Импорт данных в таблицу
             importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-
             // Перемещение файла после успешной обработки
             moveFile(csvFilePath, Paths.get(processedDir));
             logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
@@ -95,41 +102,54 @@ public class FileImporterService {
     }
 
     private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
-        // Здесь можно выбирать базу данных на основе имени файла
-        String dbUrl = parametersManager.getDbUrl(); // Берем данные из ParametersManager
-        String dbUsername = parametersManager.getDbUsername();
-        String dbPassword = parametersManager.getDbPassword();
+        String dbUrl;
+        String dbUsername;
+        String dbPassword;
+
+        if (fileName.toLowerCase().contains("ois")) {
+            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
+            dbUrl = parametersManager.getOisDbUrl();
+            dbUsername = parametersManager.getDbOisUsername();
+            dbPassword = parametersManager.getDbOisPassword();
+        } else {
+            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
+            dbUrl = parametersManager.getCoreDbUrl();
+            dbUsername = parametersManager.getDbCoreUsername();
+            dbPassword = parametersManager.getDbCorePassword();
+        }
 
         return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
     }
 
     private char detectDelimiter(Path csvFilePath) throws IOException {
-        // Примерный метод для детекции разделителя (можно усовершенствовать)
         try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
-            String headerLine = reader.readLine();
-            if (headerLine.contains(",")) {
-                return ',';
-            } else if (headerLine.contains(";")) {
-                return ';';
-            } else {
-                throw new IllegalArgumentException("Не удалось определить разделитель");
+            String firstLine = reader.readLine();
+            if (firstLine != null) {
+                if (firstLine.contains(",")) {
+                    return ',';
+                } else if (firstLine.contains(";")) {
+                    return ';';
+                } else if (firstLine.contains("\t")) {
+                    return '\t';
+                } else {
+                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
+                }
             }
         }
+        throw new IOException("Не удалось прочитать файл " + csvFilePath);
     }
 
     private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
         try (Reader reader = Files.newBufferedReader(csvFilePath);
              CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
             List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")
+                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")  // Удаляем # и оборачиваем в кавычки
                     .collect(Collectors.toList());
-
             String columns = headers.stream()
-                    .map(header -> header + " TEXT")
+                    .map(header -> header + " TEXT")  // Для простоты все столбцы создаем как TEXT
                     .collect(Collectors.joining(", "));
-
             String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
+
             try (Statement statement = connection.createStatement()) {
                 statement.execute(createTableSQL);
             }
@@ -139,28 +159,24 @@ public class FileImporterService {
     private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
         try (Reader reader = Files.newBufferedReader(csvFilePath);
              CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
             List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")
+                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")  // Обрабатываем имена столбцов
                     .collect(Collectors.toList());
-
             String insertSQL = generateInsertSQL(tableName, headers);
             try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
                 List<CSVRecord> records = csvParser.getRecords();
                 int count = 0;
-
                 for (CSVRecord record : records) {
                     for (int i = 0; i < headers.size(); i++) {
                         String value = record.get(i);
                         if (value == null || value.trim().isEmpty()) {
-                            preparedStatement.setNull(i + 1, java.sql.Types.NULL);
+                            preparedStatement.setNull(i + 1, java.sql.Types.NULL);  // Вставляем NULL, если значение отсутствует
                         } else {
                             preparedStatement.setString(i + 1, value);
                         }
                     }
                     preparedStatement.addBatch();
                     count++;
-
                     if (count % BATCHSIZE == 0) {
                         preparedStatement.executeBatch();
                     }
@@ -174,32 +190,12 @@ public class FileImporterService {
         String columns = headers.stream()
                 .map(String::trim)
                 .collect(Collectors.joining(", "));
-
         String placeholders = headers.stream()
                 .map(header -> "?")
                 .collect(Collectors.joining(", "));
-
         return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
     }
 
     private void moveFile(Path source, Path targetDir) {
         try {
-            Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
-        }
-        logger.info("Файл перемещен в {}", targetDir);
-    }
-
-    @PreDestroy
-    public void shutdownExecutorService() {
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-        }
-    }
-}
+            Files.move(source,
