@@ -1,8 +1,5 @@
 package com.example.demo.services;
 
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -93,7 +90,7 @@ public class FileImporterService {
     private void processCsvFile(Path csvFilePath) {
         String fileName = csvFilePath.getFileName().toString();
         String tableName = getTableNameWithoutExtension(fileName);
-        List<CSVRecord> records;
+        List<List<String>> records;
 
         try {
             char delimiter = detectDelimiter(csvFilePath);
@@ -126,11 +123,11 @@ public class FileImporterService {
         }
     }
 
-    private void processBatches(List<CSVRecord> records, String tableName, Connection connection) throws SQLException {
-        List<List<CSVRecord>> batches = createBatches(records, BATCHSIZE);
+    private void processBatches(List<List<String>> records, String tableName, Connection connection) throws SQLException {
+        List<List<List<String>>> batches = createBatches(records, BATCHSIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        for (List<CSVRecord> batch : batches) {
+        for (List<List<String>> batch : batches) {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 try {
                     importCsvToDatabaseBatch(batch, tableName, connection);
@@ -145,8 +142,8 @@ public class FileImporterService {
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
     }
 
-    private List<List<CSVRecord>> createBatches(List<CSVRecord> records, int batchSize) {
-        List<List<CSVRecord>> batches = new ArrayList<>();
+    private List<List<List<String>>> createBatches(List<List<String>> records, int batchSize) {
+        List<List<List<String>>> batches = new ArrayList<>();
         for (int i = 0; i < records.size(); i += batchSize) {
             batches.add(records.subList(i, Math.min(i + batchSize, records.size())));
         }
@@ -159,11 +156,26 @@ public class FileImporterService {
      * @param delimiter - разделитель
      * @return список записей
      */
-    private List<CSVRecord> readCsvRecords(Path csvFilePath, char delimiter) throws IOException {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-            return csvParser.getRecords();
+    private List<List<String>> readCsvRecords(Path csvFilePath, char delimiter) throws IOException {
+        List<List<String>> records = new ArrayList<>();
+        try (Reader reader = Files.newBufferedReader(csvFilePath)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // Разделяем строку по пробелам, если разделитель - пробел
+                if (delimiter == ' ') {
+                    String[] splitLine = line.trim().split("\\s+"); // Делим по пробелам
+                    records.add(Arrays.asList(splitLine));
+                } else {
+                    // Используем обычный CSVParser для других разделителей
+                    try (CSVParser csvParser = new CSVParser(new StringReader(line), CSVFormat.DEFAULT.withDelimiter(delimiter))) {
+                        for (CSVRecord csvRecord : csvParser) {
+                            records.add(csvRecord.stream().collect(Collectors.toList()));
+                        }
+                    }
+                }
+            }
         }
+        return records;
     }
 
     private boolean checkTableExists(String tableName) throws SQLException {
@@ -177,18 +189,18 @@ public class FileImporterService {
         }
     }
 
-    private void importCsvToDatabaseBatch(List<CSVRecord> batch, String tableName, Connection connection) throws SQLException {
+    private void importCsvToDatabaseBatch(List<List<String>> batch, String tableName, Connection connection) throws SQLException {
         if (batch.isEmpty()) return;
 
         List<String> headers = getHeadersFromBatch(batch);
         String insertSQL = generateInsertSQL(tableName, headers);
         
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            for (CSVRecord record : batch) {
+            for (List<String> record : batch) {
                 for (int i = 0; i < headers.size(); i++) {
-                    String value = record.get(i);
+                    String value = (i < record.size()) ? record.get(i) : null; // Если значение отсутствует, выставляем NULL
                     if (value == null || value.trim().isEmpty()) {
-                        preparedStatement.setNull(i + 1, java.sql.Types.NULL);  // Вставляем NULL, если значение отсутствует
+                        preparedStatement.setNull(i + 1, java.sql.Types.NULL); // Вставляем NULL, если значение отсутствует
                     } else {
                         preparedStatement.setString(i + 1, value);
                     }
@@ -199,14 +211,11 @@ public class FileImporterService {
         }
     }
 
-    private List<String> getHeadersFromBatch(List<CSVRecord> batch) {
-        return batch.get(0).getParser().getHeaderNames().stream()
-                .map(header -> "\"" + header.trim().replace("#", "") + "\"")  // Обрабатываем имена столбцов
+    private List<String> getHeadersFromBatch(List<List<String>> batch) {
+        return batch.get(0).stream()
+                .map(header -> "\"" + header.trim().replace("#", "") + "\"") // Обрабатываем имена столбцов
                 .collect(Collectors.toList());
     }
-
-    // Остальные методы остаются без изменений
-    // ...
 
     /**
      * Метод для определения разделителя csv файла
@@ -224,15 +233,12 @@ public class FileImporterService {
                 } else if (firstLine.contains("\t")) {
                     return '\t';
                 } else {
-                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
+                    return ' '; // Если ничего не найдено, считаем пробелом
                 }
             }
+            throw new IOException("Не удалось прочитать файл: " + csvFilePath);
         }
-        throw new IOException("Не удалось прочитать файл " + csvFilePath);
     }
 
-    /**
-     * Метод для создания таблицы
-     * @param csvFilePath - путь до файла
-     * @param tableName - имя таблицы
-     * @param connection - соединение с
+    // Остальные методы, такие как moveFile, createTableFromCsv, и getConnectionBasedOnFileName, остаются без изменений
+}
