@@ -1,5 +1,20 @@
-import java.util.concurrent.CompletableFuture;
+
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import com.example.demo.configurations.ParametersManager;
+
+import java.io.*;
 import java.nio.file.*;
+import java.sql.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 @Service
 public class FileImporterService {
@@ -10,15 +25,19 @@ public class FileImporterService {
     private final String processedDir;
     private static final int BATCHSIZE = 1000;
 
+    // Пул потоков для асинхронной обработки файлов
+    private final ExecutorService executorService;
+
     public FileImporterService(ParametersManager parametersManager,
                                @Value("${importer-properties.importerFolder}") String sourceDir,
                                @Value("${cleaner-properties.folderPath}") String processedDir) {
         this.parametersManager = parametersManager;
         this.sourceDir = sourceDir;
         this.processedDir = processedDir;
+        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()); // Пул потоков по числу ядер
     }
 
-    @Scheduled(fixedRate = 10000)
+    @Scheduled(fixedRate = 10000) // Запуск каждые 10 секунд
     public void watchDirectory() {
         try {
             Path sourcePath = Paths.get(sourceDir);
@@ -32,12 +51,12 @@ public class FileImporterService {
                     .forEach(filePath -> {
                         logger.info("Обнаружен новый файл: {}", filePath);
                         if (filePath.toString().endsWith(".csv")) {
-                            // Асинхронно обрабатываем каждый файл с использованием CompletableFuture (без ExecutorService)
-                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
-                                .exceptionally(ex -> {
-                                    logger.error("Ошибка при обработке файла {}", filePath, ex);
-                                    return null;
-                                });
+                            // Асинхронная обработка каждого файла
+                            CompletableFuture.runAsync(() -> processCsvFile(filePath), executorService)
+                                    .exceptionally(ex -> {
+                                        logger.error("Ошибка при обработке файла {}", filePath, ex);
+                                        return null;
+                                    });
                         }
                     });
         } catch (Exception e) {
@@ -53,15 +72,48 @@ public class FileImporterService {
             logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
             char delimiter = detectDelimiter(csvFilePath);
-            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+
+            // Синхронизированное создание таблицы
+            synchronized (this) {
+                createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            }
+
+            // Импорт данных в таблицу
             importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
 
-            // Перемещаем файл после успешной обработки
+            // Перемещение файла после успешной обработки
             moveFile(csvFilePath, Paths.get(processedDir));
-
             logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
         } catch (Exception e) {
             logger.error("Ошибка при обработке файла {}", fileName, e);
+        }
+    }
+
+    private String getTableNameWithoutExtension(String fileName) {
+        String nameWithoutExtension = fileName.substring(0, fileName.lastIndexOf("."));
+        return nameWithoutExtension.replaceAll("\\d+", "");  // Удаляем цифры из имени файла
+    }
+
+    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
+        // Здесь можно выбирать базу данных на основе имени файла
+        String dbUrl = parametersManager.getDbUrl(); // Берем данные из ParametersManager
+        String dbUsername = parametersManager.getDbUsername();
+        String dbPassword = parametersManager.getDbPassword();
+
+        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
+    }
+
+    private char detectDelimiter(Path csvFilePath) throws IOException {
+        // Примерный метод для детекции разделителя (можно усовершенствовать)
+        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
+            String headerLine = reader.readLine();
+            if (headerLine.contains(",")) {
+                return ',';
+            } else if (headerLine.contains(";")) {
+                return ';';
+            } else {
+                throw new IllegalArgumentException("Не удалось определить разделитель");
+            }
         }
     }
 
@@ -137,5 +189,17 @@ public class FileImporterService {
             logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
         }
         logger.info("Файл перемещен в {}", targetDir);
+    }
+
+    @PreDestroy
+    public void shutdownExecutorService() {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+        }
     }
 }
