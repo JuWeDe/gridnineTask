@@ -1,100 +1,141 @@
-public long getCleanerDelay() {
-    return this.cleanerDelay;
-}
+import java.util.concurrent.CompletableFuture;
+import java.nio.file.*;
 
-public String getWatchedDirectoryPath() {
-    return this.watchedDirectoryPath;
-}
+@Service
+public class FileImporterService {
 
-public int getDaysToExpire() {
-    return this.daysToExpire;
-}
+    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
+    private final ParametersManager parametersManager;
+    private final String sourceDir;
+    private final String processedDir;
+    private static final int BATCHSIZE = 1000;
 
+    public FileImporterService(ParametersManager parametersManager,
+                               @Value("${importer-properties.importerFolder}") String sourceDir,
+                               @Value("${cleaner-properties.folderPath}") String processedDir) {
+        this.parametersManager = parametersManager;
+        this.sourceDir = sourceDir;
+        this.processedDir = processedDir;
+    }
 
+    @Scheduled(fixedRate = 10000)
+    public void watchDirectory() {
+        try {
+            Path sourcePath = Paths.get(sourceDir);
+            if (!Files.exists(sourcePath)) {
+                logger.warn("Директория {} не существует", sourceDir);
+                return;
+            }
 
-
-@EventListener(ApplicationReadyEvent.class)
-public void initializeUpdateParameters() {
-    // Запуск таймера для обновления параметров один раз при старте приложения
-    TimerTask task = new TimerTask() {
-        public void run() {
-            updateParameters(); // Обновляем параметры по таймеру
+            Files.list(sourcePath)
+                    .filter(Files::isRegularFile)
+                    .forEach(filePath -> {
+                        logger.info("Обнаружен новый файл: {}", filePath);
+                        if (filePath.toString().endsWith(".csv")) {
+                            // Асинхронно обрабатываем каждый файл с использованием CompletableFuture (без ExecutorService)
+                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
+                                .exceptionally(ex -> {
+                                    logger.error("Ошибка при обработке файла {}", filePath, ex);
+                                    return null;
+                                });
+                        }
+                    });
+        } catch (Exception e) {
+            logger.error("Ошибка при наблюдении за директорией", e);
         }
-    };
-
-    // Запуск таймера с задержкой refreshRate
-    Timer timer = new Timer("ParameterUpdateTimer");
-    Parameters parameters = cacheService.getParameters(); 
-    long initialRefreshRate = parameters.getRefreshRate();
-    timer.schedule(task, initialRefreshRate, initialRefreshRate); // Таймер обновляется с заданной задержкой
-    logger.info("Таймер для обновления параметров запущен с задержкой {} миллисекунд", initialRefreshRate);
-}
-
-public void updateParameters() {
-    logger.info("Обновление параметров updateParameters()");
-    Parameters parameters = cacheService.getParameters();
-
-    // Проверяем, изменились ли параметры
-    boolean folderCleanerNeedsUpdate = parameters.getFolderCleanerDelay() != folderCleaner.getCleanerDelay()
-            || !parameters.getCleanerFolder().equals(folderCleaner.getWatchedDirectoryPath())
-            || parameters.getDaysToExpire() != folderCleaner.getDaysToExpire();
-
-    // Обновляем параметры, только если они изменились
-    if (folderCleanerNeedsUpdate) {
-        long folderCleanerDelay = parameters.getFolderCleanerDelay();
-        String watchedDirectoryPath = parameters.getCleanerFolder();
-        int daysToExpire = parameters.getDaysToExpire();
-
-        // Логирование изменений
-        logger.info("Параметры изменились. Перезапуск FolderCleaner с новыми значениями delay = {}, watchedDirectoryPath = {}, daysToExpire = {}",
-                folderCleanerDelay, watchedDirectoryPath, daysToExpire);
-
-        // Перезапускаем FolderCleaner с новыми параметрами
-        folderCleaner.startCleaningProcess(watchedDirectoryPath, folderCleanerDelay, daysToExpire);
-    } else {
-        logger.info("Параметры FolderCleaner не изменились, перезапуск не требуется.");
     }
 
-    // Обновляем FileMonitor и FileValidator
-    updateFileMonitor(parameters);
-    updateFileValidator(parameters);
+    private void processCsvFile(Path csvFilePath) {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
 
-    logger.info("Обновление параметров завершено.");
-}
+        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
-public void startCleaningProcess(String watchedDirectoryPath, long folderCleanerDelay, int daysToExpire) {
-    // Проверяем, изменились ли параметры и нужен ли перезапуск
-    if (cleanerTimer != null && this.watchedDirectoryPath.equals(watchedDirectoryPath)
-            && this.daysToExpire == daysToExpire && this.cleanerDelay == folderCleanerDelay) {
-        logger.info("Параметры не изменились, процесс очистки не перезапускается.");
-        return;
-    }
+            char delimiter = detectDelimiter(csvFilePath);
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
 
-    // Обновляем параметры
-    this.watchedDirectoryPath = watchedDirectoryPath;
-    this.daysToExpire = daysToExpire;
-    this.cleanerDelay = folderCleanerDelay;
+            // Перемещаем файл после успешной обработки
+            moveFile(csvFilePath, Paths.get(processedDir));
 
-    logger.info("Перезапуск процесса очистки с параметрами: watchedDirectoryPath = {}, cleanerDelay = {}, daysToExpire = {}",
-            watchedDirectoryPath, folderCleanerDelay, daysToExpire);
-
-    // Останавливаем старый таймер, если он был запущен
-    if (cleanerTimer != null) {
-        cleanerTimer.cancel();
-        logger.info("Старый таймер остановлен.");
-    }
-
-    // Запускаем новый таймер
-    cleanerTimer = new Timer("FolderCleanerTimer");
-    TimerTask task = new TimerTask() {
-        public void run() {
-            cleanFolder();
+            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
+        } catch (Exception e) {
+            logger.error("Ошибка при обработке файла {}", fileName, e);
         }
-    };
-    cleanerTimer.scheduleAtFixedRate(task, 0, folderCleanerDelay); // Используем новый delay
-    logger.info("Новый таймер для FolderCleaner запущен с задержкой {} миллисекунд", folderCleanerDelay);
+    }
+
+    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+            List<String> headers = csvParser.getHeaderNames().stream()
+                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")
+                    .collect(Collectors.toList());
+
+            String columns = headers.stream()
+                    .map(header -> header + " TEXT")
+                    .collect(Collectors.joining(", "));
+
+            String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(createTableSQL);
+            }
+        }
+    }
+
+    private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+            List<String> headers = csvParser.getHeaderNames().stream()
+                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")
+                    .collect(Collectors.toList());
+
+            String insertSQL = generateInsertSQL(tableName, headers);
+            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+                List<CSVRecord> records = csvParser.getRecords();
+                int count = 0;
+
+                for (CSVRecord record : records) {
+                    for (int i = 0; i < headers.size(); i++) {
+                        String value = record.get(i);
+                        if (value == null || value.trim().isEmpty()) {
+                            preparedStatement.setNull(i + 1, java.sql.Types.NULL);
+                        } else {
+                            preparedStatement.setString(i + 1, value);
+                        }
+                    }
+                    preparedStatement.addBatch();
+                    count++;
+
+                    if (count % BATCHSIZE == 0) {
+                        preparedStatement.executeBatch();
+                    }
+                }
+                preparedStatement.executeBatch();  // Выполняем оставшиеся записи
+            }
+        }
+    }
+
+    private String generateInsertSQL(String tableName, List<String> headers) {
+        String columns = headers.stream()
+                .map(String::trim)
+                .collect(Collectors.joining(", "));
+
+        String placeholders = headers.stream()
+                .map(header -> "?")
+                .collect(Collectors.joining(", "));
+
+        return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
+    }
+
+    private void moveFile(Path source, Path targetDir) {
+        try {
+            Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
+        }
+        logger.info("Файл перемещен в {}", targetDir);
+    }
 }
-
-
-
-
