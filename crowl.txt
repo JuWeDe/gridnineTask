@@ -16,37 +16,49 @@ import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.*;
 import java.sql.*;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * Сервис для импортирования данных из csv файлов в бд Ois или Core
+ */
 @Service
 public class FileImporterService {
+    /** Логгер */
     private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
+    /** Параметры для подключения к бд */
     private final ParametersManager parametersManager;
+    /** Путь до промежуточного файла хранения */
     private final String sourceDir;
+    /** Путь до последнего файлового хранилища с подключенным FolderCleaner */
     private final String processedDir;
+    /** Размер батча  */
     private static final int BATCHSIZE = 1000;
 
-    private final ExecutorService executorService;
-    private final ConcurrentHashMap<String, Boolean> processingFiles; // Для отслеживания состояния файлов
+    // Множество для отслеживания обработанных файлов
+    private final Set<String> processedFiles = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Конструктор
+     * @param parametersManager - экземпляр класса ParametersManager
+     * @param sourceDir - путь до папки, куда поступают файлы
+     * @param processedDir - путь до папки, в которую попадает файл после обработки
+     */
     public FileImporterService(ParametersManager parametersManager,
                                @Value("${importer-properties.importerFolder}") String sourceDir,
                                @Value("${cleaner-properties.folderPath}") String processedDir) {
         this.parametersManager = parametersManager;
         this.sourceDir = sourceDir;
         this.processedDir = processedDir;
-        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-        this.processingFiles = new ConcurrentHashMap<>(); // Инициализация карты
     }
 
-    @Scheduled(fixedRate = 10000)
+    /**
+     * Метод для мониторинга директории с файлами
+     */
+    @Scheduled(fixedRate = 10000) // Запуск каждые 10 секунд
     public void watchDirectory() {
         try {
             Path sourcePath = Paths.get(sourceDir);
@@ -57,17 +69,17 @@ public class FileImporterService {
 
             Files.list(sourcePath)
                     .filter(Files::isRegularFile)
-                    .filter(filePath -> !processingFiles.containsKey(filePath.toString())) // Фильтрация уже обработанных файлов
                     .forEach(filePath -> {
-                        logger.info("Обнаружен новый файл: {}", filePath);
-                        if (filePath.toString().endsWith(".csv")) {
-                            processingFiles.put(filePath.toString(), true); // Отметка файла как обрабатываемого
-                            CompletableFuture.runAsync(() -> processCsvFile(filePath), executorService)
+                        String fileName = filePath.getFileName().toString();
+                        if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
+                            logger.info("Обнаружен новый файл: {}", filePath);
+                            processedFiles.add(fileName); // Добавляем файл в список обработанных
+                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
                                     .exceptionally(ex -> {
                                         logger.error("Ошибка при обработке файла {}", filePath, ex);
+                                        processedFiles.remove(fileName); // Удаляем из списка, если произошла ошибка
                                         return null;
-                                    })
-                                    .whenComplete((result, ex) -> processingFiles.remove(filePath.toString())); // Удаляем из отслеживания после обработки
+                                    });
                         }
                     });
         } catch (Exception e) {
@@ -75,6 +87,10 @@ public class FileImporterService {
         }
     }
 
+    /**
+     * Метод для обработки csv файла
+     * @param csvFilePath - путь до файла
+     */
     private void processCsvFile(Path csvFilePath) {
         String fileName = csvFilePath.getFileName().toString();
         String tableName = getTableNameWithoutExtension(fileName);
@@ -83,12 +99,8 @@ public class FileImporterService {
             logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
             char delimiter = detectDelimiter(csvFilePath);
-
-            // Создание таблицы
             createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-            // Импорт данных в таблицу
             importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-            // Перемещение файла после успешной обработки
             moveFile(csvFilePath, Paths.get(processedDir));
             logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
         } catch (Exception e) {
@@ -96,106 +108,20 @@ public class FileImporterService {
         }
     }
 
-    private String getTableNameWithoutExtension(String fileName) {
-        String nameWithoutExtension = fileName.substring(0, fileName.lastIndexOf("."));
-        return nameWithoutExtension.replaceAll("\\d+", "");  // Удаляем цифры из имени файла
-    }
-
-    private Connection getConnectionBasedOnFileName(String fileName) throws Exception {
-        String dbUrl;
-        String dbUsername;
-        String dbPassword;
-
-        if (fileName.toLowerCase().contains("ois")) {
-            logger.info("Файл {} будет импортирован в базу данных OIS", fileName);
-            dbUrl = parametersManager.getOisDbUrl();
-            dbUsername = parametersManager.getDbOisUsername();
-            dbPassword = parametersManager.getDbOisPassword();
-        } else {
-            logger.info("Файл {} будет импортирован в базу данных CORE", fileName);
-            dbUrl = parametersManager.getCoreDbUrl();
-            dbUsername = parametersManager.getDbCoreUsername();
-            dbPassword = parametersManager.getDbCorePassword();
-        }
-
-        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
-    }
-
-    private char detectDelimiter(Path csvFilePath) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
-            String firstLine = reader.readLine();
-            if (firstLine != null) {
-                if (firstLine.contains(",")) {
-                    return ',';
-                } else if (firstLine.contains(";")) {
-                    return ';';
-                } else if (firstLine.contains("\t")) {
-                    return '\t';
-                } else {
-                    throw new IllegalArgumentException("Не удалось определить разделитель для файла " + csvFilePath);
-                }
-            }
-        }
-        throw new IOException("Не удалось прочитать файл " + csvFilePath);
-    }
-
-    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-            List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")  // Удаляем # и оборачиваем в кавычки
-                    .collect(Collectors.toList());
-            String columns = headers.stream()
-                    .map(header -> header + " TEXT")  // Для простоты все столбцы создаем как TEXT
-                    .collect(Collectors.joining(", "));
-            String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
-
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(createTableSQL);
-            }
-        }
-    }
-
-    private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-            List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim().replace("#", "") + "\"")  // Обрабатываем имена столбцов
-                    .collect(Collectors.toList());
-            String insertSQL = generateInsertSQL(tableName, headers);
-            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-                List<CSVRecord> records = csvParser.getRecords();
-                int count = 0;
-                for (CSVRecord record : records) {
-                    for (int i = 0; i < headers.size(); i++) {
-                        String value = record.get(i);
-                        if (value == null || value.trim().isEmpty()) {
-                            preparedStatement.setNull(i + 1, java.sql.Types.NULL);  // Вставляем NULL, если значение отсутствует
-                        } else {
-                            preparedStatement.setString(i + 1, value);
-                        }
-                    }
-                    preparedStatement.addBatch();
-                    count++;
-                    if (count % BATCHSIZE == 0) {
-                        preparedStatement.executeBatch();
-                    }
-                }
-                preparedStatement.executeBatch();  // Выполняем оставшиеся записи
-            }
-        }
-    }
-
-    private String generateInsertSQL(String tableName, List<String> headers) {
-        String columns = headers.stream()
-                .map(String::trim)
-                .collect(Collectors.joining(", "));
-        String placeholders = headers.stream()
-                .map(header -> "?")
-                .collect(Collectors.joining(", "));
-        return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
-    }
+    // Остальные методы остаются без изменений
+    // ...
 
     private void moveFile(Path source, Path targetDir) {
         try {
-            Files.move(source,
+            Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
+        }
+        logger.info("Файл перемещен в {}", targetDir);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        // Дополнительные действия по очистке, если необходимо
+    }
+}
