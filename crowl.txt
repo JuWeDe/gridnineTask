@@ -1,244 +1,28 @@
-package com.example.demo.services;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-import com.example.demo.configurations.ParametersManager;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.Reader;
-import java.nio.file.*;
-import java.sql.*;
-import java.util.*;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
-
-/**
- * Сервис для импортирования данных из csv файлов в бд Ois или Core
- */
-@Service
-public class FileImporterService {
-    /** Логгер */
-    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
-    /** Параметры для подключения к бд */
-    private final ParametersManager parametersManager;
-    /** Путь до промежуточного файла хранения */
-    private final String sourceDir;
-    /** Путь до последнего файлового хранилища с подключенным FolderCleaner */
-    private final String processedDir;
-    /** Размер батча  */
-    private static final int BATCHSIZE = 1000;
-
-    // Множество для отслеживания обработанных файлов
-    private final Set<String> processedFiles = ConcurrentHashMap.newKeySet();
-
-    /**
-     * Конструктор
-     * @param parametersManager - экземпляр класса ParametersManager
-     * @param sourceDir - путь до папки, куда поступают файлы
-     * @param processedDir - путь до папки, в которую попадает файл после обработки
-     */
-    public FileImporterService(ParametersManager parametersManager,
-                               @Value("${importer-properties.importerFolder}") String sourceDir,
-                               @Value("${cleaner-properties.folderPath}") String processedDir) {
-        this.parametersManager = parametersManager;
-        this.sourceDir = sourceDir;
-        this.processedDir = processedDir;
-    }
-
-    /**
-     * Метод для мониторинга директории с файлами
-     */
-    @Scheduled(fixedRate = 10000) // Запуск каждые 10 секунд
-    public void watchDirectory() {
-        try {
-            Path sourcePath = Paths.get(sourceDir);
-            if (!Files.exists(sourcePath)) {
-                logger.warn("Директория {} не существует", sourceDir);
-                return;
-            }
-
-            Files.list(sourcePath)
-                    .filter(Files::isRegularFile)
-                    .forEach(filePath -> {
-                        String fileName = filePath.getFileName().toString();
-                        if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
-                            logger.info("Обнаружен новый файл: {}", filePath);
-                            processedFiles.add(fileName); // Добавляем файл в список обработанных
-                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
-                                    .exceptionally(ex -> {
-                                        logger.error("Ошибка при обработке файла {}", filePath, ex);
-                                        processedFiles.remove(fileName); // Удаляем из списка, если произошла ошибка
-                                        return null;
-                                    });
-                        }
-                    });
-        } catch (Exception e) {
-            logger.error("Ошибка при наблюдении за директорией", e);
+private boolean checkTableExists(String tableName) throws SQLException {
+    // Проверяем сначала в базе OIS
+    try (Connection oisConnection = getConnection("ois");
+         Statement statement = oisConnection.createStatement()) {
+        ResultSet resultSet = statement.executeQuery("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '" + tableName + "'");
+        if (resultSet.next()) {
+            logger.info("Таблица {} найдена в базе OIS", tableName);
+            return true;
         }
+    } catch (SQLException e) {
+        logger.warn("Таблица {} не найдена в базе OIS", tableName);
     }
 
-    /**
-     * Метод для обработки csv файла
-     * @param csvFilePath - путь до файла
-     */
-    private void processCsvFile(Path csvFilePath) {
-        String fileName = csvFilePath.getFileName().toString();
-        String tableName = getTableNameWithoutExtension(fileName);
-        List<List<String>> records;
-
-        try {
-            char delimiter = detectDelimiter(csvFilePath);
-            records = readCsvRecords(csvFilePath, delimiter);
-
-            // Проверка существующей таблицы
-            boolean tableExists = checkTableExists(tableName);
-
-            // Обработка данных в транзакции
-            try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-                connection.setAutoCommit(false); // Отключаем авто-коммит для транзакции
-
-                if (!tableExists) {
-                    logger.info("Создание новой таблицы {}", tableName);
-                    createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-                }
-
-                // Обработка данных в батчах
-                processBatches(records, tableName, connection);
-
-                connection.commit(); // Коммит транзакции
-                moveFile(csvFilePath, Paths.get(processedDir));
-                logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
-            } catch (SQLException e) {
-                logger.error("Ошибка в транзакции при обработке файла {}", fileName, e);
-                // Если произошла ошибка, транзакция будет автоматически откатана
-            }
-        } catch (Exception e) {
-            logger.error("Ошибка при обработке файла {}", fileName, e);
+    // Если таблица не найдена в OIS, проверяем в базе Core
+    try (Connection coreConnection = getConnection("core");
+         Statement statement = coreConnection.createStatement()) {
+        ResultSet resultSet = statement.executeQuery("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '" + tableName + "'");
+        if (resultSet.next()) {
+            logger.info("Таблица {} найдена в базе Core", tableName);
+            return true;
         }
+    } catch (SQLException e) {
+        logger.warn("Таблица {} не найдена в базе Core", tableName);
     }
 
-    private void processBatches(List<List<String>> records, String tableName, Connection connection) throws SQLException {
-        List<List<List<String>>> batches = createBatches(records, BATCHSIZE);
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (List<List<String>> batch : batches) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                try {
-                    importCsvToDatabaseBatch(batch, tableName, connection);
-                } catch (SQLException e) {
-                    logger.error("Ошибка при импорте батча в таблицу {}", tableName, e);
-                }
-            });
-            futures.add(future);
-        }
-
-        // Ждем завершения всех батчей
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-    }
-
-    private List<List<List<String>>> createBatches(List<List<String>> records, int batchSize) {
-        List<List<List<String>>> batches = new ArrayList<>();
-        for (int i = 0; i < records.size(); i += batchSize) {
-            batches.add(records.subList(i, Math.min(i + batchSize, records.size())));
-        }
-        return batches;
-    }
-
-    /**
-     * Метод для чтения записей CSV
-     * @param csvFilePath - путь до файла
-     * @param delimiter - разделитель
-     * @return список записей
-     */
-    private List<List<String>> readCsvRecords(Path csvFilePath, char delimiter) throws IOException {
-        List<List<String>> records = new ArrayList<>();
-        try (Reader reader = Files.newBufferedReader(csvFilePath)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                // Разделяем строку по пробелам, если разделитель - пробел
-                if (delimiter == ' ') {
-                    String[] splitLine = line.trim().split("\\s+"); // Делим по пробелам
-                    records.add(Arrays.asList(splitLine));
-                } else {
-                    // Используем обычный CSVParser для других разделителей
-                    try (CSVParser csvParser = new CSVParser(new StringReader(line), CSVFormat.DEFAULT.withDelimiter(delimiter))) {
-                        for (CSVRecord csvRecord : csvParser) {
-                            records.add(csvRecord.stream().collect(Collectors.toList()));
-                        }
-                    }
-                }
-            }
-        }
-        return records;
-    }
-
-    private boolean checkTableExists(String tableName) throws SQLException {
-        try (Connection connection = getConnectionBasedOnFileName(tableName);
-             Statement statement = connection.createStatement()) {
-            ResultSet resultSet = statement.executeQuery("SELECT 1 FROM " + tableName + " LIMIT 1");
-            return resultSet.next();
-        } catch (SQLException e) {
-            // Если таблица не найдена, будет выброшено SQLException, что является ожидаемым поведением
-            return false;
-        }
-    }
-
-    private void importCsvToDatabaseBatch(List<List<String>> batch, String tableName, Connection connection) throws SQLException {
-        if (batch.isEmpty()) return;
-
-        List<String> headers = getHeadersFromBatch(batch);
-        String insertSQL = generateInsertSQL(tableName, headers);
-        
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            for (List<String> record : batch) {
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = (i < record.size()) ? record.get(i) : null; // Если значение отсутствует, выставляем NULL
-                    if (value == null || value.trim().isEmpty()) {
-                        preparedStatement.setNull(i + 1, java.sql.Types.NULL); // Вставляем NULL, если значение отсутствует
-                    } else {
-                        preparedStatement.setString(i + 1, value);
-                    }
-                }
-                preparedStatement.addBatch();
-            }
-            preparedStatement.executeBatch(); // Выполняем батч
-        }
-    }
-
-    private List<String> getHeadersFromBatch(List<List<String>> batch) {
-        return batch.get(0).stream()
-                .map(header -> "\"" + header.trim().replace("#", "") + "\"") // Обрабатываем имена столбцов
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Метод для определения разделителя csv файла
-     * @param csvFilePath - путь до файла
-     * @return char возвращает разделитель csv файла
-     */
-    private char detectDelimiter(Path csvFilePath) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
-            String firstLine = reader.readLine();
-            if (firstLine != null) {
-                if (firstLine.contains(",")) {
-                    return ',';
-                } else if (firstLine.contains(";")) {
-                    return ';';
-                } else if (firstLine.contains("\t")) {
-                    return '\t';
-                } else {
-                    return ' '; // Если ничего не найдено, считаем пробелом
-                }
-            }
-            throw new IOException("Не удалось прочитать файл: " + csvFilePath);
-        }
-    }
-
-    // Остальные методы, такие как moveFile, createTableFromCsv, и getConnectionBasedOnFileName, остаются без изменений
+    logger.info("Таблица {} не найдена ни в базе OIS, ни в базе Core", tableName);
+    return false; // Таблица не найдена ни в одной из баз
 }
