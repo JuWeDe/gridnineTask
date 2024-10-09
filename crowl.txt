@@ -1,3 +1,49 @@
+/**
+ * Метод для переноса данных из файла в таблицу в бд
+ * @param csvFilePath - путь до файла
+ * @param tableName - имя таблицы
+ * @param connection - соединение с бд
+ * @param delimiter - разделитель csv файла
+ */
+private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        // Разбиваем заголовки с пробелами на отдельные элементы
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))  // Разделяем заголовки по пробелам
+                .collect(Collectors.toList());
+
+        String insertSQL = generateInsertSQL(tableName, headers);  // Используем новые заголовки для вставки
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
+
+            for (CSVRecord record : records) {
+                int parameterIndex = 1;  // Индекс для параметров PreparedStatement
+                for (String header : csvParser.getHeaderNames()) {
+                    List<String> splitHeaders = splitHeader(header.trim()).collect(Collectors.toList());
+                    for (String splitHeader : splitHeaders) {
+                        String value = record.get(header);  // Получаем исходное значение для заголовка
+                        if (value == null || value.trim().isEmpty()) {
+                            preparedStatement.setNull(parameterIndex, java.sql.Types.NULL);  // Если пусто, вставляем NULL
+                        } else {
+                            preparedStatement.setString(parameterIndex, value);
+                        }
+                        parameterIndex++;  // Увеличиваем индекс для следующего параметра
+                    }
+                }
+
+                preparedStatement.addBatch();
+                count++;
+                if (count % BATCHSIZE == 0) {
+                    preparedStatement.executeBatch();
+                }
+            }
+            preparedStatement.executeBatch();  // Выполняем оставшиеся записи
+        }
+    }
+}
 
 /**
  * Метод для создания таблицы на основе заголовков CSV
@@ -11,7 +57,7 @@ private void createTableFromCsv(Path csvFilePath, String tableName, Connection c
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
 
         List<String> headers = csvParser.getHeaderNames().stream()
-                .map(header -> fixHeader(header.trim()))  // Исправляем заголовки
+                .flatMap(header -> splitHeader(header.trim()))  // Разбиваем заголовки по пробелам
                 .collect(Collectors.toList());
 
         String columns = headers.stream()
@@ -26,100 +72,14 @@ private void createTableFromCsv(Path csvFilePath, String tableName, Connection c
 }
 
 /**
- * Метод для исправления заголовков, содержащих пробелы
+ * Метод для разделения заголовков по пробелам
  * @param header - исходный заголовок столбца
- * @return исправленный заголовок
+ * @return Stream с отдельными заголовками
  */
-private String fixHeader(String header) {
+private Stream<String> splitHeader(String header) {
     // Если заголовок содержит пробелы, разбиваем его на несколько частей
     if (header.contains(" ")) {
-        // Если нужно, мы можем добавить дополнительную обработку, например объединение слов через нижнее подчеркивание
-        return header.replaceAll("\\s+", "_");  // Пробелы заменяем на нижнее подчеркивание
+        return Arrays.stream(header.split("\\s+"));  // Разделяем по пробелам
     }
-    return header;
-}
-
-
-private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .map(header -> "\"" + header.trim() + "\"")  // Поддерживаем имена столбцов с #
-                .collect(Collectors.toList());
-
-        // Проверяем на наличие объединенных столбцов
-        headers = fixMergedHeaders(headers);
-
-        String insertSQL = generateInsertSQL(tableName, headers);
-
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
-
-            for (CSVRecord record : records) {
-                // Проверяем на наличие объединенных данных в строках
-                List<String> values = fixMergedValues(record, headers.size());
-
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = values.get(i);
-                    if (value == null || value.trim().isEmpty()) {
-                        preparedStatement.setNull(i + 1, java.sql.Types.NULL);
-                    } else {
-                        preparedStatement.setString(i + 1, value);
-                    }
-                }
-                preparedStatement.addBatch();
-                count++;
-
-                if (count % BATCHSIZE == 0) {
-                    preparedStatement.executeBatch();
-                }
-            }
-
-            preparedStatement.executeBatch();
-        }
-    }
-}
-
-/**
- * Функция для исправления объединенных заголовков
- * @param headers Заголовки, которые нужно проверить
- * @return Исправленные заголовки
- */
-private List<String> fixMergedHeaders(List<String> headers) {
-    List<String> fixedHeaders = new ArrayList<>();
-    for (String header : headers) {
-        // Разделяем заголовок, если в нем есть пробел
-        if (header.contains(" ")) {
-            String[] splitHeaders = header.split("\\s+");
-            for (String splitHeader : splitHeaders) {
-                fixedHeaders.add("\"" + splitHeader.trim() + "\"");
-            }
-        } else {
-            fixedHeaders.add(header);
-        }
-    }
-    return fixedHeaders;
-}
-
-/**
- * Функция для исправления объединенных данных в строках
- * @param record Строка с данными
- * @param expectedSize Ожидаемое количество столбцов
- * @return Исправленные значения
- */
-private List<String> fixMergedValues(CSVRecord record, int expectedSize) {
-    List<String> values = new ArrayList<>();
-    
-    for (String value : record) {
-        // Добавляем значение с учетом его корректного разделения
-        values.addAll(Arrays.asList(value.split("\\s+")));
-    }
-    
-    // Если количество значений отличается от ожидаемого, добавляем недостающие пустые значения
-    while (values.size() < expectedSize) {
-        values.add(null);
-    }
-    
-    return values;
+    return Stream.of(header);  // Если нет пробелов, возвращаем исходный заголовок
 }
