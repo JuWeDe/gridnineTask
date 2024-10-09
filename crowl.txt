@@ -1,3 +1,45 @@
+
+/**
+ * Метод для создания таблицы на основе заголовков CSV
+ * @param csvFilePath - путь до файла
+ * @param tableName - имя таблицы
+ * @param connection - соединение с бд
+ * @param delimiter - разделитель csv файла
+ */
+private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .map(header -> fixHeader(header.trim()))  // Исправляем заголовки
+                .collect(Collectors.toList());
+
+        String columns = headers.stream()
+                .map(header -> "\"" + header + "\" TEXT")
+                .collect(Collectors.joining(", "));
+
+        String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(createTableSQL);
+        }
+    }
+}
+
+/**
+ * Метод для исправления заголовков, содержащих пробелы
+ * @param header - исходный заголовок столбца
+ * @return исправленный заголовок
+ */
+private String fixHeader(String header) {
+    // Если заголовок содержит пробелы, разбиваем его на несколько частей
+    if (header.contains(" ")) {
+        // Если нужно, мы можем добавить дополнительную обработку, например объединение слов через нижнее подчеркивание
+        return header.replaceAll("\\s+", "_");  // Пробелы заменяем на нижнее подчеркивание
+    }
+    return header;
+}
+
+
 private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
