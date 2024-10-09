@@ -1,203 +1,83 @@
-package com.example.demo.services;
+private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .map(header -> "\"" + header.trim() + "\"")  // Поддерживаем имена столбцов с #
+                .collect(Collectors.toList());
 
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-import com.example.demo.configurations.ParametersManager;
+        // Проверяем на наличие объединенных столбцов
+        headers = fixMergedHeaders(headers);
 
-import javax.annotation.PreDestroy;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.Reader;
-import java.nio.file.*;
-import java.sql.*;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.*;
-import java.util.stream.Collectors;
+        String insertSQL = generateInsertSQL(tableName, headers);
 
-@Service
-public class FileImporterService {
-    private static final Logger logger = LoggerFactory.getLogger(FileImporterService.class);
-    private final ParametersManager parametersManager;
-    private final String sourceDir;
-    private final String processedDir;
-    private static final int BATCHSIZE = 1000;
-    private final Set<String> processedFiles = ConcurrentHashMap.newKeySet();
-    private final ExecutorService executorService;
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
 
-    public FileImporterService(ParametersManager parametersManager,
-                               @Value("${importer-properties.importerFolder}") String sourceDir,
-                               @Value("${cleaner-properties.folderPath}") String processedDir) {
-        this.parametersManager = parametersManager;
-        this.sourceDir = sourceDir;
-        this.processedDir = processedDir;
-        this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-    }
+            for (CSVRecord record : records) {
+                // Проверяем на наличие объединенных данных в строках
+                List<String> values = fixMergedValues(record, headers.size());
 
-    @Scheduled(fixedRate = 10000) // Запуск каждые 10 секунд
-    public void watchDirectory() {
-        try {
-            Path sourcePath = Paths.get(sourceDir);
-            if (!Files.exists(sourcePath)) {
-                logger.warn("Директория {} не существует", sourceDir);
-                return;
-            }
-
-            Files.list(sourcePath)
-                    .filter(Files::isRegularFile)
-                    .forEach(filePath -> {
-                        String fileName = filePath.getFileName().toString();
-                        if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
-                            logger.info("Обнаружен новый файл: {}", filePath);
-                            processedFiles.add(fileName); 
-                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
-                                    .exceptionally(ex -> {
-                                        logger.error("Ошибка при обработке файла {}", filePath, ex);
-                                        processedFiles.remove(fileName);
-                                        return null;
-                                    });
-                        }
-                    });
-        } catch (Exception e) {
-            logger.error("Ошибка при наблюдении за директорией", e);
-        }
-    }
-
-    private void processCsvFile(Path csvFilePath) {
-        String fileName = csvFilePath.getFileName().toString();
-        String tableName = getTableNameWithoutExtension(fileName);
-
-        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
-
-            char delimiter = detectDelimiter(csvFilePath);
-
-            // Проверяем существование таблицы и её столбцов
-            if (!doesTableExist(connection, tableName) || !doesTableHaveSameColumns(csvFilePath, tableName, connection, delimiter)) {
-                createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-            }
-
-            // Дополняем таблицу новыми данными
-            importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-            moveFile(csvFilePath, Paths.get(processedDir));
-
-            logger.info("Файл {} обработан и перемещен в {}", fileName, processedDir);
-        } catch (Exception e) {
-            logger.error("Ошибка при обработке файла {}", fileName, e);
-        }
-    }
-
-    private boolean doesTableExist(Connection connection, String tableName) throws SQLException {
-        DatabaseMetaData meta = connection.getMetaData();
-        try (ResultSet resultSet = meta.getTables(null, null, tableName, new String[]{"TABLE"})) {
-            return resultSet.next();
-        }
-    }
-
-    private boolean doesTableHaveSameColumns(Path csvFilePath, String tableName, Connection connection, char delimiter) throws SQLException, IOException {
-        List<String> csvHeaders;
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-            csvHeaders = csvParser.getHeaderNames();
-        }
-
-        // Получаем имена столбцов таблицы из базы данных
-        DatabaseMetaData metaData = connection.getMetaData();
-        try (ResultSet rs = metaData.getColumns(null, null, tableName, null)) {
-            List<String> tableColumns = new ArrayList<>();
-            while (rs.next()) {
-                tableColumns.add(rs.getString("COLUMN_NAME"));
-            }
-
-            return csvHeaders.size() == tableColumns.size() && tableColumns.containsAll(csvHeaders);
-        }
-    }
-
-    private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-            List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim() + "\"")  // Оставляем символы вроде #
-                    .collect(Collectors.toList());
-
-            String columns = headers.stream()
-                    .map(header -> header + " TEXT")
-                    .collect(Collectors.joining(", "));
-
-            String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(createTableSQL);
-            }
-        }
-    }
-
-    private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-            List<String> headers = csvParser.getHeaderNames().stream()
-                    .map(header -> "\"" + header.trim() + "\"")  // Поддерживаем имена столбцов с #
-                    .collect(Collectors.toList());
-
-            String insertSQL = generateInsertSQL(tableName, headers);
-
-            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-                List<CSVRecord> records = csvParser.getRecords();
-                int count = 0;
-
-                for (CSVRecord record : records) {
-                    for (int i = 0; i < headers.size(); i++) {
-                        String value = record.get(i);
-                        if (value == null || value.trim().isEmpty()) {
-                            preparedStatement.setNull(i + 1, java.sql.Types.NULL);
-                        } else {
-                            preparedStatement.setString(i + 1, value);
-                        }
-                    }
-                    preparedStatement.addBatch();
-                    count++;
-
-                    if (count % BATCHSIZE == 0) {
-                        preparedStatement.executeBatch();
+                for (int i = 0; i < headers.size(); i++) {
+                    String value = values.get(i);
+                    if (value == null || value.trim().isEmpty()) {
+                        preparedStatement.setNull(i + 1, java.sql.Types.NULL);
+                    } else {
+                        preparedStatement.setString(i + 1, value);
                     }
                 }
+                preparedStatement.addBatch();
+                count++;
 
-                preparedStatement.executeBatch();
+                if (count % BATCHSIZE == 0) {
+                    preparedStatement.executeBatch();
+                }
             }
+
+            preparedStatement.executeBatch();
         }
     }
+}
 
-    private String generateInsertSQL(String tableName, List<String> headers) {
-        String columns = headers.stream()
-                .map(String::trim)
-                .collect(Collectors.joining(", "));
-        String placeholders = headers.stream()
-                .map(header -> "?")
-                .collect(Collectors.joining(", "));
-        return String.format("INSERT INTO %s (%s) VALUES (%s)", tableName, columns, placeholders);
-    }
-
-    private void moveFile(Path source, Path targetDir) {
-        try {
-            Files.move(source, targetDir.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            logger.error("Ошибка при перемещении файла {}", source.getFileName(), e);
-        }
-        logger.info("Файл перемещен в {}", targetDir);
-    }
-
-    @PreDestroy
-    public void shutdownExecutorService() {
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
+/**
+ * Функция для исправления объединенных заголовков
+ * @param headers Заголовки, которые нужно проверить
+ * @return Исправленные заголовки
+ */
+private List<String> fixMergedHeaders(List<String> headers) {
+    List<String> fixedHeaders = new ArrayList<>();
+    for (String header : headers) {
+        // Разделяем заголовок, если в нем есть пробел
+        if (header.contains(" ")) {
+            String[] splitHeaders = header.split("\\s+");
+            for (String splitHeader : splitHeaders) {
+                fixedHeaders.add("\"" + splitHeader.trim() + "\"");
             }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow
+        } else {
+            fixedHeaders.add(header);
+        }
+    }
+    return fixedHeaders;
+}
+
+/**
+ * Функция для исправления объединенных данных в строках
+ * @param record Строка с данными
+ * @param expectedSize Ожидаемое количество столбцов
+ * @return Исправленные значения
+ */
+private List<String> fixMergedValues(CSVRecord record, int expectedSize) {
+    List<String> values = new ArrayList<>();
+    
+    for (String value : record) {
+        // Добавляем значение с учетом его корректного разделения
+        values.addAll(Arrays.asList(value.split("\\s+")));
+    }
+    
+    // Если количество значений отличается от ожидаемого, добавляем недостающие пустые значения
+    while (values.size() < expectedSize) {
+        values.add(null);
+    }
+    
+    return values;
+}
