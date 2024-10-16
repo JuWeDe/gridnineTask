@@ -1,3 +1,4 @@
+
 private void processCsvFile(Path csvFilePath) {
     String fileName = csvFilePath.getFileName().toString();
     String tableName = getTableNameWithoutExtension(fileName);
@@ -29,14 +30,15 @@ private void processCsvFile(Path csvFilePath) {
     } catch (Exception e) {
         logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
         try {
-            // Откат транзакции в случае ошибки
-            if (isTableCreated) {
-                // Удаляем таблицу только если она была создана в процессе текущего импорта
-                dropTableIfExists(tableName);
+            if (connection != null) {
+                connection.rollback();  // Откат изменений при ошибке
+                logger.info("Откат изменений для таблицы {}", tableName);
+                
+                if (isTableCreated) {
+                    // Удаляем таблицу, если она была создана в процессе текущего импорта
+                    dropTableIfExists(connection, tableName);
+                }
             }
-            Connection connection = getConnectionBasedOnFileName(fileName);  // Получаем соединение для отката
-            connection.rollback();
-            logger.info("Откат изменений для таблицы {}", tableName);
         } catch (SQLException rollbackEx) {
             logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
         }
@@ -47,15 +49,18 @@ private void processCsvFile(Path csvFilePath) {
     }
 }
 
-/**
- * Метод для удаления таблицы
- * @param tableName - имя таблицы
- */
-private void dropTableIfExists(String tableName) throws SQLException {
+
+
+dhdjdjdjjd
+
+private void dropTableIfExists(Connection connection, String tableName) throws SQLException {
     String dropSQL = String.format("DROP TABLE IF EXISTS %s", tableName);
-    try (Connection connection = getConnectionBasedOnFileName(tableName);
-         Statement statement = connection.createStatement()) {
+    try (Statement statement = connection.createStatement()) {
         statement.execute(dropSQL);
         logger.info("Таблица {} удалена", tableName);
     }
 }
+
+
+
+
