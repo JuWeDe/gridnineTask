@@ -1,85 +1,61 @@
-/**
- * Метод для переноса данных из файла в таблицу в бд
- * @param csvFilePath - путь до файла
- * @param tableName - имя таблицы
- * @param connection - соединение с бд
- * @param delimiter - разделитель csv файла
- */
-private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+private void processCsvFile(Path csvFilePath) {
+    String fileName = csvFilePath.getFileName().toString();
+    String tableName = getTableNameWithoutExtension(fileName);
+    boolean isTableCreated = false;
 
-        // Разбиваем заголовки с пробелами на отдельные элементы
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))  // Разделяем заголовки по пробелам
-                .collect(Collectors.toList());
+    try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+        connection.setAutoCommit(false);  // Отключаем автокоммит для управления транзакцией вручную
+        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
-        String insertSQL = generateInsertSQL(tableName, headers);  // Используем новые заголовки для вставки
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
+        char delimiter = detectDelimiter(csvFilePath);
 
-            for (CSVRecord record : records) {
-                int parameterIndex = 1;  // Индекс для параметров PreparedStatement
-                for (String header : csvParser.getHeaderNames()) {
-                    List<String> splitHeaders = splitHeader(header.trim()).collect(Collectors.toList());
-                    for (String splitHeader : splitHeaders) {
-                        String value = record.get(header);  // Получаем исходное значение для заголовка
-                        if (value == null || value.trim().isEmpty()) {
-                            preparedStatement.setNull(parameterIndex, java.sql.Types.NULL);  // Если пусто, вставляем NULL
-                        } else {
-                            preparedStatement.setString(parameterIndex, value);
-                        }
-                        parameterIndex++;  // Увеличиваем индекс для следующего параметра
-                    }
-                }
+        // Проверяем существование таблицы и её столбцов
+        if (!doesTableExist(connection, tableName)) {
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            isTableCreated = true;
+        } else if (!doesTableHaveSameColumns(csvFilePath, tableName, connection, delimiter)) {
+            throw new SQLException("Заголовки CSV файла не соответствуют столбцам существующей таблицы.");
+        }
 
-                preparedStatement.addBatch();
-                count++;
-                if (count % BATCHSIZE == 0) {
-                    preparedStatement.executeBatch();
-                }
+        // Дополняем таблицу новыми данными
+        importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+
+        connection.commit();  // Коммитим транзакцию, если все успешно
+        logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
+
+        updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(successDir));
+        processedFiles.remove(fileName);
+    } catch (Exception e) {
+        logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
+        try {
+            // Откат транзакции в случае ошибки
+            if (isTableCreated) {
+                // Удаляем таблицу только если она была создана в процессе текущего импорта
+                dropTableIfExists(tableName);
             }
-            preparedStatement.executeBatch();  // Выполняем оставшиеся записи
+            Connection connection = getConnectionBasedOnFileName(fileName);  // Получаем соединение для отката
+            connection.rollback();
+            logger.info("Откат изменений для таблицы {}", tableName);
+        } catch (SQLException rollbackEx) {
+            logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
         }
+
+        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(errorDir));
+        processedFiles.remove(fileName);
     }
 }
 
 /**
- * Метод для создания таблицы на основе заголовков CSV
- * @param csvFilePath - путь до файла
+ * Метод для удаления таблицы
  * @param tableName - имя таблицы
- * @param connection - соединение с бд
- * @param delimiter - разделитель csv файла
  */
-private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))  // Разбиваем заголовки по пробелам
-                .collect(Collectors.toList());
-
-        String columns = headers.stream()
-                .map(header -> "\"" + header + "\" TEXT")
-                .collect(Collectors.joining(", "));
-
-        String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
-        try (Statement statement = connection.createStatement()) {
-            statement.execute(createTableSQL);
-        }
+private void dropTableIfExists(String tableName) throws SQLException {
+    String dropSQL = String.format("DROP TABLE IF EXISTS %s", tableName);
+    try (Connection connection = getConnectionBasedOnFileName(tableName);
+         Statement statement = connection.createStatement()) {
+        statement.execute(dropSQL);
+        logger.info("Таблица {} удалена", tableName);
     }
-}
-
-/**
- * Метод для разделения заголовков по пробелам
- * @param header - исходный заголовок столбца
- * @return Stream с отдельными заголовками
- */
-private Stream<String> splitHeader(String header) {
-    // Если заголовок содержит пробелы, разбиваем его на несколько частей
-    if (header.contains(" ")) {
-        return Arrays.stream(header.split("\\s+"));  // Разделяем по пробелам
-    }
-    return Stream.of(header);  // Если нет пробелов, возвращаем исходный заголовок
 }
