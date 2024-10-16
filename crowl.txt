@@ -1,78 +1,80 @@
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import java.nio.file.StandardCopyOption;
-
 private void processZipFile(Path zipFilePath) {
     String zipFileName = zipFilePath.getFileName().toString();
+    boolean success = true;
+
+    // Проверяем, загружен ли файл полностью
     if (!isFileFullyUploaded(zipFilePath, 5, 2000)) {
-        logger.error("Файл {} не загружен", zipFilePath.getFileName());
+        logger.error("Файл {} не загружен", zipFileName);
         moveFile(zipFilePath, Paths.get(errorDir));
         updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
         return;
     }
 
+    // Создаем временную папку
+    Path tempDir;
+    try {
+        tempDir = Files.createTempDirectory("zip_extract_");
+    } catch (IOException e) {
+        logger.error("Не удалось создать временную папку: {}", ExceptionFilter.displayError(e));
+        moveFile(zipFilePath, Paths.get(errorDir));
+        return;
+    }
+
+    List<Path> extractedFiles = new ArrayList<>(); // Для хранения путей извлеченных файлов
+
     try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
         ZipEntry zipEntry;
         while ((zipEntry = zis.getNextEntry()) != null) {
-            // Если файл внутри архива CSV, извлекаем его
             if (zipEntry.getName().endsWith(".csv")) {
-                Path extractedFile = Paths.get(sourceDir, zipEntry.getName());
-                
-                // Извлекаем файл
+                // Извлекаем файл во временную директорию
+                Path extractedFile = tempDir.resolve(zipEntry.getName());
+                Files.createDirectories(extractedFile.getParent());  // Создаем директории, если не существуют
                 Files.copy(zis, extractedFile, StandardCopyOption.REPLACE_EXISTING);
+                extractedFiles.add(extractedFile);  // Добавляем файл в список извлеченных
 
-                // Запускаем асинхронную обработку файла CSV
-                CompletableFuture.runAsync(() -> processCsvFile(extractedFile))
-                        .exceptionally(ex -> {
-                            logger.error("Ошибка при обработке CSV файла из архива {}", extractedFile + ExceptionFilter.displayError(ex));
-                            return null;
-                        });
+                // Обрабатываем CSV файл
+                try {
+                    processCsvFile(extractedFile);  // Обрабатываем CSV файл
+                } catch (Exception ex) {
+                    logger.error("Ошибка при обработке CSV файла {}: {}", extractedFile, ex.getMessage());
+                    success = false;  // Устанавливаем флаг ошибки
+                    break;  // Прерываем обработку при первой ошибке
+                }
             }
         }
-    } catch (IOException e) {
-        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
-        moveFile(zipFilePath, Paths.get(errorDir));
-    }
-}
 
-
-
-watxh 
-
-@Scheduled(fixedRate = 10000)
-public void watchDirectory() {
-    try {
-        Path sourcePath = Paths.get(sourceDir);
-        if (!Files.exists(sourcePath)) {
-            logger.warn("Директория {} не существует", sourceDir);
-            return;
+        // Если все файлы успешно обработаны
+        if (success) {
+            // Перемещаем ZIP файл в директорию успешной обработки
+            moveFile(zipFilePath, Paths.get(successDir));
+        } else {
+            // Если произошла ошибка, перемещаем все файлы в директорию ошибок
+            for (Path extractedFile : extractedFiles) {
+                moveFile(extractedFile, Paths.get(errorDir));
+            }
+            // Перемещаем ZIP файл в директорию ошибок
+            moveFile(zipFilePath, Paths.get(errorDir));
         }
 
-        Files.list(sourcePath)
-                .filter(Files::isRegularFile)
-                .forEach(filePath -> {
-                    String fileName = filePath.getFileName().toString();
-                    if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
-                        logger.info("Обнаружен новый CSV файл: {}", filePath);
-                        processedFiles.add(fileName);
-                        CompletableFuture.runAsync(() -> processCsvFile(filePath))
-                                .exceptionally(ex -> {
-                                    logger.error("Ошибка при обработке файла {}", filePath + ExceptionFilter.displayError(ex));
-                                    processedFiles.remove(fileName);
-                                    return null;
-                                });
-                    } else if (fileName.endsWith(".zip") && !processedFiles.contains(fileName)) {
-                        logger.info("Обнаружен новый ZIP файл: {}", filePath);
-                        processedFiles.add(fileName);
-                        CompletableFuture.runAsync(() -> processZipFile(filePath))
-                                .exceptionally(ex -> {
-                                    logger.error("Ошибка при обработке ZIP файла {}", filePath + ExceptionFilter.displayError(ex));
-                                    processedFiles.remove(fileName);
-                                    return null;
-                                });
-                    }
-                });
-    } catch (Exception e) {
-        logger.error(ExceptionFilter.displayError(e));
+    } catch (IOException e) {
+        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
+        success = false;
+    } finally {
+        // Очищаем временную папку
+        try {
+            Files.walk(tempDir)
+                .sorted(Comparator.reverseOrder())
+                .map(Path::toFile)
+                .forEach(File::delete);
+            Files.delete(tempDir);  // Удаляем саму временную директорию
+        } catch (IOException e) {
+            logger.error("Ошибка при очистке временной папки {}: {}", tempDir, ExceptionFilter.displayError(e));
+        }
+    }
+
+    // В случае ошибки или если распаковка прошла неуспешно
+    if (!success) {
+        logger.error("Неудачная обработка архива: {}", zipFileName);
+        moveFile(zipFilePath, Paths.get(errorDir));
     }
 }
