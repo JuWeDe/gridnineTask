@@ -1,33 +1,71 @@
-private boolean isFileFullyUploaded(Path filePath, int retries, long delayMillis) {
-    long previousSize = -1;
-    for (int i = 0; i < retries; i++) {
-        try {
-            long currentSize = Files.size(filePath);
-            if (currentSize == previousSize) {
-                // Если размер файла не изменился, файл загружен
-                return true;
-            }
-            previousSize = currentSize;
-            // Ждем перед повторной проверкой
-            Thread.sleep(delayMillis);
-        } catch (IOException | InterruptedException e) {
-            logger.error("Ошибка при проверке загрузки файла: {}", filePath.getFileName(), e);
-            return false;
+private void processCsvFile(Path csvFilePath) {
+    String fileName = csvFilePath.getFileName().toString();
+    String tableName = getTableNameWithoutExtension(fileName);
+
+    try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+        char delimiter = detectDelimiter(csvFilePath);
+
+        // Обрабатываем заголовки перед началом импорта
+        List<String> normalizedCsvHeaders = processCsvHeaders(csvFilePath, delimiter);
+
+        // Проверяем существование таблицы и её столбцов
+        if (!doesTableExist(connection, tableName) || 
+            !doesTableHaveSameColumns(normalizedCsvHeaders, tableName, connection)) {
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
         }
+
+        // Дополняем таблицу новыми данными
+        importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+
+        logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
+        updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(successDir));
+        processedFiles.remove(fileName);
+    } catch (Exception e) {
+        logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
+        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(errorDir));
+        processedFiles.remove(fileName);
     }
-    // Если через несколько попыток файл всё ещё изменяется — ошибка
-    return false;
 }
 
-private void processCsvFile(Path csvFilePath) {
-    // Проверяем, завершена ли загрузка файла
-    if (!isFileFullyUploaded(csvFilePath, 5, 2000)) { // 5 попыток с интервалом 2 сек
-        logger.error("Файл {} не завершен загрузкой, переносим в папку ошибок", csvFilePath.getFileName());
-        moveFile(csvFilePath, Paths.get(errorDir));  // Перемещаем файл в папку ошибок
-        return;
-    }
+/**
+ * Метод для обработки заголовков CSV файла
+ * @param csvFilePath - путь до файла
+ * @param delimiter - разделитель csv файла
+ * @return нормализованные заголовки
+ */
+private List<String> processCsvHeaders(Path csvFilePath, char delimiter) throws IOException {
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
 
-    // Если файл полностью загружен, продолжаем его обработку
-    // Ваш код по обработке CSV файла
-    // ...
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim())) // Разбиваем заголовки по пробелам
+                .collect(Collectors.toList());
+
+        logger.info("Нормализованные заголовки: {}", headers);
+        return normalizeHeaders(headers); // Нормализуем заголовки (например, убираем пробелы и приводим к нижнему регистру)
+    }
+}
+
+/**
+ * Метод для проверки существования таблицы и её столбцов
+ * @param normalizedCsvHeaders - нормализованные заголовки CSV
+ * @param tableName - имя таблицы
+ * @param connection - соединение с БД
+ * @return true если заголовки файла совпали со столбцами существующей таблицы
+ */
+private boolean doesTableHaveSameColumns(List<String> normalizedCsvHeaders, String tableName, Connection connection) throws SQLException {
+    DatabaseMetaData metaData = connection.getMetaData();
+    try (ResultSet rs = metaData.getColumns(null, null, tableName, null)) {
+        List<String> tableColumns = new ArrayList<>();
+        while (rs.next()) {
+            tableColumns.add(rs.getString("COLUMN_NAME").trim().toLowerCase()); // Нормализуем имена столбцов таблицы
+        }
+
+        return new HashSet<>(tableColumns).containsAll(normalizedCsvHeaders) &&
+                normalizedCsvHeaders.size() == tableColumns.size();
+    }
 }
