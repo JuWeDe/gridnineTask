@@ -1,101 +1,159 @@
-import java.io.*;
-import java.nio.file.*;
-import java.sql.Connection;
-import java.sql.Timestamp;
-import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-
-public class FileImporterService {
-
-    public void processFile(Path filePath) {
-        String fileName = filePath.getFileName().toString();
-        
-        // Проверка, является ли файл zip-архивом
-        if (fileName.endsWith(".zip")) {
-            processZipFile(filePath);  // Если это ZIP, то разархивируем и обрабатываем CSV файлы внутри
-        } else if (fileName.endsWith(".csv")) {
-            processCsvFile(filePath);  // Если это обычный CSV, обрабатываем его как раньше
-        } else {
-            logger.error("Неподдерживаемый тип файла: {}", fileName);
+@Scheduled(fixedRate = 10000)
+public void watchDirectory() {
+    try {
+        Path sourcePath = Paths.get(sourceDir);
+        if (!Files.exists(sourcePath)) {
+            logger.warn("Директория {} не существует", sourceDir);
+            return;
         }
-    }
 
-    /**
-     * Метод для обработки ZIP-файла. Извлекает и обрабатывает все CSV-файлы внутри архива.
-     */
-    private void processZipFile(Path zipFilePath) {
-        try (ZipInputStream zipInputStream = new ZipInputStream(new BufferedInputStream(Files.newInputStream(zipFilePath)))) {
-            ZipEntry entry;
-            while ((entry = zipInputStream.getNextEntry()) != null) {
-                if (entry.getName().endsWith(".csv")) {
-                    logger.info("Обрабатываем файл {} из архива {}", entry.getName(), zipFilePath);
-
-                    // Создаем временный файл для извлеченного CSV
-                    Path tempCsvFile = Files.createTempFile("extracted_", ".csv");
-
-                    // Сохраняем содержимое файла из архива во временный файл
-                    try (OutputStream tempFileStream = Files.newOutputStream(tempCsvFile)) {
-                        byte[] buffer = new byte[1024];
-                        int len;
-                        while ((len = zipInputStream.read(buffer)) > 0) {
-                            tempFileStream.write(buffer, 0, len);
-                        }
+        Files.list(sourcePath)
+                .filter(Files::isRegularFile)
+                .forEach(filePath -> {
+                    String fileName = filePath.getFileName().toString();
+                    if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
+                        logger.info("Обнаружен новый CSV файл: {}", filePath);
+                        processedFiles.add(fileName);
+                        CompletableFuture.runAsync(() -> processCsvFile(filePath))
+                                .exceptionally(ex -> {
+                                    logger.error("Ошибка при обработке файла {}", filePath + ExceptionFilter.displayError(ex));
+                                    processedFiles.remove(fileName);
+                                    return null;
+                                });
+                    } else if (fileName.endsWith(".zip") && !processedFiles.contains(fileName)) {
+                        logger.info("Обнаружен новый ZIP файл: {}", filePath);
+                        processedFiles.add(fileName);
+                        CompletableFuture.runAsync(() -> processZipFile(filePath))
+                                .exceptionally(ex -> {
+                                    logger.error("Ошибка при обработке ZIP файла {}", filePath + ExceptionFilter.displayError(ex));
+                                    processedFiles.remove(fileName);
+                                    return null;
+                                });
                     }
-
-                    // Обрабатываем извлеченный CSV файл
-                    processCsvFile(tempCsvFile);
-
-                    // После обработки удаляем временный файл
-                    Files.delete(tempCsvFile);
-                }
-                zipInputStream.closeEntry();
-            }
-
-            logger.info("Архив {} успешно обработан", zipFilePath);
-            updateFileIterations(zipFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
-            moveFile(zipFilePath, Paths.get(successDir));
-
-        } catch (IOException e) {
-            logger.error("Ошибка при обработке zip-файла {}", zipFilePath, e);
-            updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
-            moveFile(zipFilePath, Paths.get(errorDir));
-        }
-    }
-
-    /**
-     * Метод для обработки CSV файлов как раньше.
-     */
-    private void processCsvFile(Path csvFilePath) {
-        String fileName = csvFilePath.getFileName().toString();
-        String tableName = getTableNameWithoutExtension(fileName);
-
-        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
-
-            char delimiter = detectDelimiter(csvFilePath);
-
-            // Обрабатываем заголовки перед началом импорта
-            List<String> normalizedCsvHeaders = processCsvHeaders(csvFilePath, delimiter);
-
-            // Проверяем существование таблицы и её столбцов
-            if (!doesTableExist(connection, tableName) || 
-                !doesTableHaveSameColumns(normalizedCsvHeaders, tableName, connection)) {
-                createTableFromCsv(csvFilePath, tableName, connection, delimiter);
-            }
-
-            // Дополняем таблицу новыми данными
-            importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-
-            logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
-            updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
-            moveFile(csvFilePath, Paths.get(successDir));
-            processedFiles.remove(fileName);
-        } catch (Exception e) {
-            logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
-            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
-            moveFile(csvFilePath, Paths.get(errorDir));
-            processedFiles.remove(fileName);
-        }
+                });
+    } catch (Exception e) {
+        logger.error(ExceptionFilter.displayError(e));
     }
 }
+
+
+
+zop
+
+private void processZipFile(Path zipFilePath) {
+    try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
+        ZipEntry zipEntry;
+        while ((zipEntry = zis.getNextEntry()) != null) {
+            if (zipEntry.getName().endsWith(".csv")) {
+                logger.info("Обрабатываем CSV файл {} из ZIP архива", zipEntry.getName());
+
+                // Чтение содержимого CSV файла из ZIP архива
+                Path tempFile = Files.createTempFile(zipEntry.getName(), ".csv");
+                Files.copy(zis, tempFile, StandardCopyOption.REPLACE_EXISTING);
+
+                // Обрабатываем CSV файл как обычный
+                processCsvFile(tempFile);
+
+                // Удаляем временный файл после обработки
+                Files.deleteIfExists(tempFile);
+            }
+            zis.closeEntry();
+        }
+
+        // Перемещаем обработанный ZIP файл в папку успеха или ошибки
+        moveFile(zipFilePath, Paths.get(successDir));
+
+    } catch (Exception e) {
+        logger.error("Ошибка при обработке ZIP файла {}", zipFilePath + ExceptionFilter.displayError(e));
+        moveFile(zipFilePath, Paths.get(errorDir));
+    }
+}
+
+
+new iter
+
+
+private void processZipFile(Path zipFilePath) {
+    String fileName = zipFilePath.getFileName().toString();
+
+    try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
+        ZipEntry zipEntry;
+
+        // Извлекаем каждый файл в архиве
+        while ((zipEntry = zis.getNextEntry()) != null) {
+            String entryName = zipEntry.getName();
+
+            // Обрабатываем только CSV-файлы внутри ZIP
+            if (entryName.endsWith(".csv")) {
+                logger.info("Извлечение и обработка CSV файла {} из ZIP {}", entryName, fileName);
+
+                Path tempCsvPath = Paths.get(sourceDir, entryName);
+                
+                // Копируем содержимое файла во временный файл на диске
+                try {
+                    Files.copy(zis, tempCsvPath, StandardCopyOption.REPLACE_EXISTING);
+                    processCsvFile(tempCsvPath); // Обрабатываем CSV как обычный файл
+                    Files.delete(tempCsvPath); // Удаляем временный файл после обработки
+                } catch (IOException e) {
+                    logger.error("Ошибка при извлечении CSV файла {} из ZIP {}: {}", entryName, fileName, ExceptionFilter.displayError(e));
+                }
+            }
+        }
+
+        // По окончании обработки всех CSV перемещаем ZIP в папку успеха
+        moveFile(zipFilePath, Paths.get(successDir));
+        processedFiles.remove(fileName);
+    } catch (Exception e) {
+        logger.error("Ошибка при обработке ZIP файла {}: {}", fileName, ExceptionFilter.displayError(e));
+        moveFile(zipFilePath, Paths.get(errorDir)); // Перемещаем в папку с ошибками при неудаче
+        processedFiles.remove(fileName);
+    }
+}
+
+
+
+new watcehr 
+
+@Scheduled(fixedRate = 10000)
+public void watchDirectory() {
+    try {
+        Path sourcePath = Paths.get(sourceDir);
+        if (!Files.exists(sourcePath)) {
+            logger.warn("Директория {} не существует", sourceDir);
+            return;
+        }
+
+        Files.list(sourcePath)
+                .filter(Files::isRegularFile)
+                .forEach(filePath -> {
+                    String fileName = filePath.getFileName().toString();
+                    
+                    // Если это CSV-файл, обработаем его как обычно
+                    if (fileName.endsWith(".csv") && !processedFiles.contains(fileName)) {
+                        logger.info("Обнаружен новый CSV файл: {}", filePath);
+                        processedFiles.add(fileName);
+                        CompletableFuture.runAsync(() -> processCsvFile(filePath))
+                                .exceptionally(ex -> {
+                                    logger.error("Ошибка при обработке файла {}", filePath + ExceptionFilter.displayError(ex));
+                                    processedFiles.remove(fileName);
+                                    return null;
+                                });
+                    }
+                    // Если это ZIP-файл
+                    else if (fileName.endsWith(".zip") && !processedFiles.contains(fileName)) {
+                        logger.info("Обнаружен новый ZIP файл: {}", filePath);
+                        processedFiles.add(fileName);
+                        CompletableFuture.runAsync(() -> processZipFile(filePath))
+                                .exceptionally(ex -> {
+                                    logger.error("Ошибка при обработке ZIP файла {}", filePath + ExceptionFilter.displayError(ex));
+                                    processedFiles.remove(fileName);
+                                    return null;
+                                });
+                    }
+                });
+    } catch (Exception e) {
+        logger.error(ExceptionFilter.displayError(e));
+    }
+}
+
+
