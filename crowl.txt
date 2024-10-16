@@ -1,10 +1,11 @@
-
 private void processCsvFile(Path csvFilePath) {
     String fileName = csvFilePath.getFileName().toString();
     String tableName = getTableNameWithoutExtension(fileName);
     boolean isTableCreated = false;
+    Connection connection = null;  // Переносим объявление переменной сюда
 
-    try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+    try {
+        connection = getConnectionBasedOnFileName(fileName);
         connection.setAutoCommit(false);  // Отключаем автокоммит для управления транзакцией вручную
         logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
 
@@ -33,7 +34,7 @@ private void processCsvFile(Path csvFilePath) {
             if (connection != null) {
                 connection.rollback();  // Откат изменений при ошибке
                 logger.info("Откат изменений для таблицы {}", tableName);
-                
+
                 if (isTableCreated) {
                     // Удаляем таблицу, если она была создана в процессе текущего импорта
                     dropTableIfExists(connection, tableName);
@@ -46,21 +47,86 @@ private void processCsvFile(Path csvFilePath) {
         updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
         moveFile(csvFilePath, Paths.get(errorDir));
         processedFiles.remove(fileName);
+    } finally {
+        // Закрываем соединение вручную
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException closeEx) {
+                logger.error("Ошибка при закрытии соединения: {}", ExceptionFilter.displayError(closeEx));
+            }
+        }
     }
 }
 
 
 
-dhdjdjdjjd
 
-private void dropTableIfExists(Connection connection, String tableName) throws SQLException {
-    String dropSQL = String.format("DROP TABLE IF EXISTS %s", tableName);
-    try (Statement statement = connection.createStatement()) {
-        statement.execute(dropSQL);
-        logger.info("Таблица {} удалена", tableName);
+witha appYaml
+
+spring:
+  datasource:
+    hikari:
+      auto-commit: false  # Отключаем автокоммит по умолчанию для всех соединений
+
+
+private void processCsvFile(Path csvFilePath) {
+    String fileName = csvFilePath.getFileName().toString();
+    String tableName = getTableNameWithoutExtension(fileName);
+    boolean isTableCreated = false;
+    Connection connection = null;
+
+    try {
+        connection = getConnectionBasedOnFileName(fileName);
+        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+        char delimiter = detectDelimiter(csvFilePath);
+
+        // Проверяем существование таблицы и её столбцов
+        if (!doesTableExist(connection, tableName)) {
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            isTableCreated = true;
+        } else if (!doesTableHaveSameColumns(csvFilePath, tableName, connection, delimiter)) {
+            throw new SQLException("Заголовки CSV файла не соответствуют столбцам существующей таблицы.");
+        }
+
+        // Дополняем таблицу новыми данными
+        importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+
+        connection.commit();  // Коммитим транзакцию, если все успешно
+        logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
+
+        updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(successDir));
+        processedFiles.remove(fileName);
+    } catch (Exception e) {
+        logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
+        try {
+            if (connection != null) {
+                connection.rollback();  // Откат изменений при ошибке
+                logger.info("Откат изменений для таблицы {}", tableName);
+
+                if (isTableCreated) {
+                    // Удаляем таблицу, если она была создана в процессе текущего импорта
+                    dropTableIfExists(connection, tableName);
+                }
+            }
+        } catch (SQLException rollbackEx) {
+            logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
+        }
+
+        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+        moveFile(csvFilePath, Paths.get(errorDir));
+        processedFiles.remove(fileName);
+    } finally {
+        // Закрываем соединение вручную
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException closeEx) {
+                logger.error("Ошибка при закрытии соединения: {}", ExceptionFilter.displayError(closeEx));
+            }
+        }
     }
 }
-
-
-
 
