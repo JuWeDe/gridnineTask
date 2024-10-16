@@ -1,71 +1,101 @@
-private void processCsvFile(Path csvFilePath) {
-    String fileName = csvFilePath.getFileName().toString();
-    String tableName = getTableNameWithoutExtension(fileName);
+import java.io.*;
+import java.nio.file.*;
+import java.sql.Connection;
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
-    try (Connection connection = getConnectionBasedOnFileName(fileName)) {
-        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+public class FileImporterService {
 
-        char delimiter = detectDelimiter(csvFilePath);
-
-        // Обрабатываем заголовки перед началом импорта
-        List<String> normalizedCsvHeaders = processCsvHeaders(csvFilePath, delimiter);
-
-        // Проверяем существование таблицы и её столбцов
-        if (!doesTableExist(connection, tableName) || 
-            !doesTableHaveSameColumns(normalizedCsvHeaders, tableName, connection)) {
-            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+    public void processFile(Path filePath) {
+        String fileName = filePath.getFileName().toString();
+        
+        // Проверка, является ли файл zip-архивом
+        if (fileName.endsWith(".zip")) {
+            processZipFile(filePath);  // Если это ZIP, то разархивируем и обрабатываем CSV файлы внутри
+        } else if (fileName.endsWith(".csv")) {
+            processCsvFile(filePath);  // Если это обычный CSV, обрабатываем его как раньше
+        } else {
+            logger.error("Неподдерживаемый тип файла: {}", fileName);
         }
-
-        // Дополняем таблицу новыми данными
-        importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-
-        logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
-        updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
-        moveFile(csvFilePath, Paths.get(successDir));
-        processedFiles.remove(fileName);
-    } catch (Exception e) {
-        logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
-        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
-        moveFile(csvFilePath, Paths.get(errorDir));
-        processedFiles.remove(fileName);
     }
-}
 
-/**
- * Метод для обработки заголовков CSV файла
- * @param csvFilePath - путь до файла
- * @param delimiter - разделитель csv файла
- * @return нормализованные заголовки
- */
-private List<String> processCsvHeaders(Path csvFilePath, char delimiter) throws IOException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+    /**
+     * Метод для обработки ZIP-файла. Извлекает и обрабатывает все CSV-файлы внутри архива.
+     */
+    private void processZipFile(Path zipFilePath) {
+        try (ZipInputStream zipInputStream = new ZipInputStream(new BufferedInputStream(Files.newInputStream(zipFilePath)))) {
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+                if (entry.getName().endsWith(".csv")) {
+                    logger.info("Обрабатываем файл {} из архива {}", entry.getName(), zipFilePath);
 
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim())) // Разбиваем заголовки по пробелам
-                .collect(Collectors.toList());
+                    // Создаем временный файл для извлеченного CSV
+                    Path tempCsvFile = Files.createTempFile("extracted_", ".csv");
 
-        logger.info("Нормализованные заголовки: {}", headers);
-        return normalizeHeaders(headers); // Нормализуем заголовки (например, убираем пробелы и приводим к нижнему регистру)
-    }
-}
+                    // Сохраняем содержимое файла из архива во временный файл
+                    try (OutputStream tempFileStream = Files.newOutputStream(tempCsvFile)) {
+                        byte[] buffer = new byte[1024];
+                        int len;
+                        while ((len = zipInputStream.read(buffer)) > 0) {
+                            tempFileStream.write(buffer, 0, len);
+                        }
+                    }
 
-/**
- * Метод для проверки существования таблицы и её столбцов
- * @param normalizedCsvHeaders - нормализованные заголовки CSV
- * @param tableName - имя таблицы
- * @param connection - соединение с БД
- * @return true если заголовки файла совпали со столбцами существующей таблицы
- */
-private boolean doesTableHaveSameColumns(List<String> normalizedCsvHeaders, String tableName, Connection connection) throws SQLException {
-    DatabaseMetaData metaData = connection.getMetaData();
-    try (ResultSet rs = metaData.getColumns(null, null, tableName, null)) {
-        List<String> tableColumns = new ArrayList<>();
-        while (rs.next()) {
-            tableColumns.add(rs.getString("COLUMN_NAME").trim().toLowerCase()); // Нормализуем имена столбцов таблицы
+                    // Обрабатываем извлеченный CSV файл
+                    processCsvFile(tempCsvFile);
+
+                    // После обработки удаляем временный файл
+                    Files.delete(tempCsvFile);
+                }
+                zipInputStream.closeEntry();
+            }
+
+            logger.info("Архив {} успешно обработан", zipFilePath);
+            updateFileIterations(zipFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+            moveFile(zipFilePath, Paths.get(successDir));
+
+        } catch (IOException e) {
+            logger.error("Ошибка при обработке zip-файла {}", zipFilePath, e);
+            updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+            moveFile(zipFilePath, Paths.get(errorDir));
         }
+    }
 
-        return new HashSet<>(tableColumns).containsAll(normalizedCsvHeaders) &&
-                normalizedCsvHeaders.size() == tableColumns.size();
+    /**
+     * Метод для обработки CSV файлов как раньше.
+     */
+    private void processCsvFile(Path csvFilePath) {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
+
+        try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+            logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+            char delimiter = detectDelimiter(csvFilePath);
+
+            // Обрабатываем заголовки перед началом импорта
+            List<String> normalizedCsvHeaders = processCsvHeaders(csvFilePath, delimiter);
+
+            // Проверяем существование таблицы и её столбцов
+            if (!doesTableExist(connection, tableName) || 
+                !doesTableHaveSameColumns(normalizedCsvHeaders, tableName, connection)) {
+                createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            }
+
+            // Дополняем таблицу новыми данными
+            importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+
+            logger.info("Файл {} обработан и перемещен в {}", fileName, successDir);
+            updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+            moveFile(csvFilePath, Paths.get(successDir));
+            processedFiles.remove(fileName);
+        } catch (Exception e) {
+            logger.error("Ошибка при импортировании файла {} в бд", fileName, ExceptionFilter.displayError(e));
+            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+            moveFile(csvFilePath, Paths.get(errorDir));
+            processedFiles.remove(fileName);
+        }
     }
 }
