@@ -1,99 +1,236 @@
-private void processCsvFile(Path csvFilePath, boolean shouldMove) {
-    try {
-        // Логика обработки CSV файла
-        // ...
+private void processZipFile(Path zipFilePath) {
+    CompletableFuture.runAsync(() -> {
+        String zipFileName = zipFilePath.getFileName().toString();
+        boolean success = true;
+        Path errorDirPath = Paths.get(errorDir);
 
-        if (shouldMove) {
-            moveFile(csvFilePath, Paths.get(successDir));  // Перемещаем только если флаг установлен
+        if (isFileFullyUploaded(zipFilePath, 5, 2000)) {
+            logger.error("Архив {} не загружен", zipFileName);
+            moveFile(zipFilePath, errorDirPath);
+            updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+            return;
         }
-    } catch (Exception ex) {
-        logger.error("Ошибка обработки CSV файла {}: {}", csvFilePath, ex.getMessage());
-        throw ex;  // Пробрасываем ошибку обратно
-    }
+
+        Path tempDir;
+        try {
+            tempDir = Files.createTempDirectory("zipextract_");
+        } catch (IOException e) {
+            logger.error("Не удалось создать временную папку: {}", ExceptionFilter.displayError(e));
+            moveFile(zipFilePath, errorDirPath);
+            return;
+        }
+
+        List<CompletableFuture<Void>> tasks = new ArrayList<>();
+
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
+            ZipEntry zipEntry;
+            Path successDirPath = Paths.get(successDir);
+            while ((zipEntry = zis.getNextEntry()) != null) {
+                if (zipEntry.getName().endsWith(".csv")) {
+                    Path extractedFile = tempDir.resolve(zipEntry.getName());
+                    Files.createDirectories(extractedFile.getParent());
+                    Files.copy(zis, extractedFile, StandardCopyOption.REPLACE_EXISTING);
+
+                    // Параллельно обрабатываем каждый CSV файл
+                    tasks.add(CompletableFuture.runAsync(() -> processCsvFile(extractedFile), executorService));
+                }
+            }
+
+            // Ожидаем завершения всех задач
+            CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0])).join();
+
+            if (success) {
+                moveFile(zipFilePath, successDirPath);
+                processedFiles.remove(zipFileName);
+            } else {
+                moveFile(zipFilePath, errorDirPath);
+                processedFiles.remove(zipFileName);
+            }
+        } catch (IOException e) {
+            logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
+        } finally {
+            try {
+                Files.delete(tempDir);
+            } catch (IOException e) {
+                logger.error("Ошибка при очистке временной папки {}: {}", tempDir, ExceptionFilter.displayError(e));
+            }
+        }
+    }, executorService);
 }
 
 
-processZipFile
 
+procCsv 2nd
 
-private void processZipFile(Path zipFilePath) {
-    String zipFileName = zipFilePath.getFileName().toString();
-    boolean success = true;
+private void processCsvFile(Path csvFilePath) {
+    CompletableFuture.runAsync(() -> {
+        String fileName = csvFilePath.getFileName().toString();
+        String tableName = getTableNameWithoutExtension(fileName);
+        boolean isTableCreated = false;
+        Connection connection = null;
+        Path errorDirPath = Paths.get(errorDir);
 
-    // Проверяем, загружен ли файл полностью
-    if (!isFileFullyUploaded(zipFilePath, 5, 2000)) {
-        logger.error("Файл {} не загружен", zipFileName);
-        moveFile(zipFilePath, Paths.get(errorDir));
-        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
-        return;
-    }
+        if (isFileFullyUploaded(csvFilePath, 5, 2000)) {
+            logger.error("Файл {} не загружен", csvFilePath.getFileName());
+            moveFile(csvFilePath, errorDirPath);
+            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+            return;
+        }
 
-    // Создаем временную папку
-    Path tempDir;
-    try {
-        tempDir = Files.createTempDirectory("zip_extract_");
-    } catch (IOException e) {
-        logger.error("Не удалось создать временную папку: {}", ExceptionFilter.displayError(e));
-        moveFile(zipFilePath, Paths.get(errorDir));
-        return;
-    }
+        try {
+            connection = getConnectionBasedOnFileName(fileName);
+            if (connection != null) {
+                connection.setAutoCommit(false);
+            }
 
-    List<Path> extractedFiles = new ArrayList<>(); // Для хранения путей извлеченных файлов
+            char delimiter = detectDelimiter(csvFilePath);
 
-    try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
-        ZipEntry zipEntry;
-        while ((zipEntry = zis.getNextEntry()) != null) {
-            if (zipEntry.getName().endsWith(".csv")) {
-                // Извлекаем файл во временную директорию
-                Path extractedFile = tempDir.resolve(zipEntry.getName());
-                Files.createDirectories(extractedFile.getParent());  // Создаем директории, если не существуют
-                Files.copy(zis, extractedFile, StandardCopyOption.REPLACE_EXISTING);
-                extractedFiles.add(extractedFile);  // Добавляем файл в список извлеченных
-
-                // Обрабатываем CSV файл
-                try {
-                    processCsvFile(extractedFile, false);  // Передаем флаг false, чтобы не перемещать CSV файлы
-                } catch (Exception ex) {
-                    logger.error("Ошибка при обработке CSV файла {}: {}", extractedFile, ex.getMessage());
-                    success = false;  // Устанавливаем флаг ошибки
-                    break;  // Прерываем обработку при первой ошибке
+            // Проверяем существование таблицы
+            if (!doesTableExist(connection, tableName)) {
+                if (connection != null) {
+                    createTableFromCsv(csvFilePath, tableName, connection, delimiter);
                 }
+                isTableCreated = true;
+            }
+
+            // Параллельная вставка в таблицу
+            CompletableFuture<Void> importTask = CompletableFuture.runAsync(() -> {
+                try {
+                    importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+                    updateFileIterations(csvFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
+                } catch (Exception e) {
+                    logger.error("Ошибка при вставке данных в таблицу {}", tableName + ExceptionFilter.displayError(e));
+                }
+            });
+
+            // Ожидаем завершения вставки
+            importTask.join();
+
+            if (connection != null) {
+                connection.commit();
+            }
+
+            logger.info("Файл {} успешно обработан", fileName);
+            moveFile(csvFilePath, Paths.get(successDir));
+            processedFiles.remove(fileName);
+        } catch (Exception e) {
+            logger.info("Ошибка при импортировании файла {} в бд", fileName + ExceptionFilter.displayError(e));
+            try {
+                if (connection != null) {
+                    connection.rollback();
+                    logger.info("Откат изменений для таблицы {}", tableName);
+
+                    if (isTableCreated) {
+                        dropTableIfExists(connection, tableName);
+                    }
+                }
+            } catch (SQLException rollbackEx) {
+                logger.error("Ошибка при откате изменений для таблицы {}:", tableName + ExceptionFilter.displayError(rollbackEx));
+            }
+            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+            moveFile(csvFilePath, errorDirPath);
+            processedFiles.remove(fileName);
+        }
+    }, executorService);
+}
+
+
+
+procCsv plus insertHype 
+
+
+
+private void processCsvFile(Path csvFilePath) {
+    String fileName = csvFilePath.getFileName().toString();
+    String tableName = getTableNameWithoutExtension(fileName);
+    boolean isTableCreated = false;
+    Path errorDirPath = Paths.get(errorDir);
+    
+    if (isFileFullyUploaded(csvFilePath, 5, 2000)) {
+        logger.error("Файл {} не загружен", csvFilePath.getFileName());
+        moveFile(csvFilePath, errorDirPath);
+        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
+        return;
+    }
+
+    ExecutorService threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    try (Connection connection = getConnectionBasedOnFileName(fileName)) {
+        if (connection != null) {
+            connection.setAutoCommit(false);  // Отключаем автокоммит для ручного управления транзакциями
+        }
+
+        char delimiter = detectDelimiter(csvFilePath);
+        
+        // Проверяем и создаем таблицу при необходимости
+        if (doesTableExist(connection, tableName)) {
+            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            isTableCreated = true;
+        }
+
+        // Оптимизированная обработка данных
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        
+        try (BufferedReader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+            List<String> headers = csvParser.getHeaderNames().stream()
+                    .map(String::trim)
+                    .map(header -> "\"" + header + "\"")
+                    .collect(Collectors.toList());
+            
+            String insertSQL = generateInsertSQL(tableName, headers);
+
+            List<CSVRecord> records = csvParser.getRecords();
+            int chunkSize = BATCHSIZE;  // Размер батча для обработки
+            for (int i = 0; i < records.size(); i += chunkSize) {
+                int start = i;
+                int end = Math.min(records.size(), i + chunkSize);
+                List<CSVRecord> batchRecords = records.subList(start, end);
+
+                // Обрабатываем каждую партию записей в отдельном потоке
+                futures.add(CompletableFuture.runAsync(() -> {
+                    try {
+                        insertRecordsToDatabase(connection, insertSQL, batchRecords, headers);
+                    } catch (SQLException e) {
+                        logger.error("Ошибка при вставке данных в таблицу {}: {}", tableName, e.getMessage());
+                        throw new RuntimeException(e);
+                    }
+                }, threadPool));
             }
         }
 
-        // Если все файлы успешно обработаны
-        if (success) {
-            // Перемещаем ZIP файл в директорию успешной обработки (перемещаем только архив)
-            moveFile(zipFilePath, Paths.get(successDir));
-        } else {
-            // При ошибке перемещаем архив в директорию с ошибками
-            moveFile(zipFilePath, Paths.get(errorDir));
+        // Ожидаем завершения всех потоков
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        if (connection != null) {
+            connection.commit();  // Коммитим транзакцию
         }
 
-    } catch (IOException e) {
-        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
-        success = false;
+        logger.info("Файл {} успешно обработан ", fileName);
+        moveFile(csvFilePath, Paths.get(successDir));  // Перемещаем файл в папку успешных
+        processedFiles.remove(fileName);
+    } catch (Exception e) {
+        handleImportError(csvFilePath, errorDirPath, isTableCreated, tableName, e);
     } finally {
-        // Очищаем временную папку
-        try {
-            Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())
-                .map(Path::toFile)
-                .forEach(file -> {
-                    if (!file.delete()) {
-                        logger.error("Не удалось удалить файл: {}", file.getPath());
-                    }
-                });
-            Files.delete(tempDir);  // Удаляем саму временную директорию
-        } catch (IOException e) {
-            logger.error("Ошибка при очистке временной папки {}: {}", tempDir, ExceptionFilter.displayError(e));
-        }
+        threadPool.shutdown();
     }
+}
 
-    // В случае ошибки или если распаковка прошла неуспешно
-    if (!success) {
-        logger.error("Неудачная обработка архива: {}", zipFileName);
-        moveFile(zipFilePath, Paths.get(errorDir));
+private void insertRecordsToDatabase(Connection connection, String insertSQL, List<CSVRecord> records, List<String> headers) throws SQLException {
+    try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+        for (CSVRecord record : records) {
+            for (int i = 0; i < headers.size(); i++) {
+                String value = record.get(i);
+                if (value == null || value.trim().isEmpty()) {
+                    preparedStatement.setNull(i + 1, Types.NULL);
+                } else {
+                    preparedStatement.setString(i + 1, value);
+                }
+            }
+            preparedStatement.addBatch();
+        }
+        preparedStatement.executeBatch();  // Выполняем пакетную вставку
     }
 }
 
