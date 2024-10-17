@@ -1,3 +1,21 @@
+private void processCsvFile(Path csvFilePath, boolean shouldMove) {
+    try {
+        // Логика обработки CSV файла
+        // ...
+
+        if (shouldMove) {
+            moveFile(csvFilePath, Paths.get(successDir));  // Перемещаем только если флаг установлен
+        }
+    } catch (Exception ex) {
+        logger.error("Ошибка обработки CSV файла {}: {}", csvFilePath, ex.getMessage());
+        throw ex;  // Пробрасываем ошибку обратно
+    }
+}
+
+
+processZipFile
+
+
 private void processZipFile(Path zipFilePath) {
     String zipFileName = zipFilePath.getFileName().toString();
     boolean success = true;
@@ -34,7 +52,7 @@ private void processZipFile(Path zipFilePath) {
 
                 // Обрабатываем CSV файл
                 try {
-                    processCsvFile(extractedFile);  // Обрабатываем CSV файл
+                    processCsvFile(extractedFile, false);  // Передаем флаг false, чтобы не перемещать CSV файлы
                 } catch (Exception ex) {
                     logger.error("Ошибка при обработке CSV файла {}: {}", extractedFile, ex.getMessage());
                     success = false;  // Устанавливаем флаг ошибки
@@ -45,14 +63,10 @@ private void processZipFile(Path zipFilePath) {
 
         // Если все файлы успешно обработаны
         if (success) {
-            // Перемещаем ZIP файл в директорию успешной обработки
+            // Перемещаем ZIP файл в директорию успешной обработки (перемещаем только архив)
             moveFile(zipFilePath, Paths.get(successDir));
         } else {
-            // Если произошла ошибка, перемещаем все файлы в директорию ошибок
-            for (Path extractedFile : extractedFiles) {
-                moveFile(extractedFile, Paths.get(errorDir));
-            }
-            // Перемещаем ZIP файл в директорию ошибок
+            // При ошибке перемещаем архив в директорию с ошибками
             moveFile(zipFilePath, Paths.get(errorDir));
         }
 
@@ -65,7 +79,11 @@ private void processZipFile(Path zipFilePath) {
             Files.walk(tempDir)
                 .sorted(Comparator.reverseOrder())
                 .map(Path::toFile)
-                .forEach(File::delete);
+                .forEach(file -> {
+                    if (!file.delete()) {
+                        logger.error("Не удалось удалить файл: {}", file.getPath());
+                    }
+                });
             Files.delete(tempDir);  // Удаляем саму временную директорию
         } catch (IOException e) {
             logger.error("Ошибка при очистке временной папки {}: {}", tempDir, ExceptionFilter.displayError(e));
@@ -78,3 +96,4 @@ private void processZipFile(Path zipFilePath) {
         moveFile(zipFilePath, Paths.get(errorDir));
     }
 }
+
