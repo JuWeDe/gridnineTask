@@ -3,6 +3,9 @@ private void processZipFile(Path zipFilePath) {
     boolean success = true;
 
     Path errorDirPath = Paths.get(errorDir);
+    Path successDirPath = Paths.get(successDir);
+
+    // Проверяем полную загрузку ZIP-файла
     if (isFileFullyUploaded(zipFilePath, 5, 2000)) {
         logger.error("Архив {} не загружен полностью", zipFileName);
         moveFile(zipFilePath, errorDirPath);
@@ -10,6 +13,7 @@ private void processZipFile(Path zipFilePath) {
         return;
     }
 
+    // Создаем временную директорию для распаковки
     Path tempDir;
     try {
         tempDir = Files.createTempDirectory("zip_extract_");
@@ -22,20 +26,84 @@ private void processZipFile(Path zipFilePath) {
 
     try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
         ZipEntry zipEntry;
-        List<CompletableFuture<Void>> futures = new ArrayList<>(); // Хранение задач по обработке файлов
+        List<CompletableFuture<Void>> futures = new ArrayList<>(); // Список для хранения задач обработки файлов
 
+        // Проходим по всем файлам в архиве
         while ((zipEntry = zis.getNextEntry()) != null) {
             if (zipEntry.getName().endsWith(".csv")) {
-                // Извлекаем файл во временную директорию
                 Path extractedFile = tempDir.resolve(zipEntry.getName());
-                Files.createDirectories(extractedFile.getParent()); // Создаем директории, если не существуют
-                Files.copy(zis, extractedFile, StandardCopyOption.REPLACE_EXISTING);
+                Files.createDirectories(extractedFile.getParent()); // Создаем директории, если они отсутствуют
+                Files.copy(zis, extractedFile, StandardCopyOption.REPLACE_EXISTING); // Копируем файл
 
-                // Создаем CompletableFuture для каждого файла
+                // Обрабатываем каждый CSV-файл в отдельном потоке
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                    processSingleCsvFile(extractedFile, zipFileName, tempDir); // Обрабатываем каждый CSV файл
+                    Connection connection = null;
+                    String fileName = extractedFile.getFileName().toString();
+                    String tableName = getTableNameWithoutExtension(fileName);
+                    boolean isTableCreated = false;
+
+                    try {
+                        // Проверяем, полностью ли загружен файл
+                        if (isFileFullyUploaded(extractedFile, 5, 2000)) {
+                            logger.error("Файл {} из архива {} не загружен полностью", extractedFile.getFileName(), zipFileName);
+                            throw new IllegalStateException("Файл не загружен полностью.");
+                        }
+
+                        // Получаем соединение с БД
+                        connection = getConnectionBasedOnFileName(fileName);
+                        if (connection != null) {
+                            connection.setAutoCommit(false);  // Отключаем автокоммит для ручного управления транзакцией
+                        }
+
+                        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+                        // Определяем разделитель CSV файла
+                        char delimiter = detectDelimiter(extractedFile);
+
+                        // Проверка и создание таблицы
+                        if (!doesTableExist(connection, tableName)) {
+                            createTableFromCsv(extractedFile, tableName, connection, delimiter);
+                            isTableCreated = true;
+                        }
+
+                        // Импорт данных в таблицу
+                        importCsvToDatabaseBatch(extractedFile, tableName, connection, delimiter);
+
+                        // Коммит транзакции
+                        if (connection != null) {
+                            connection.commit();
+                        }
+
+                        logger.info("Файл {} успешно обработан и данные загружены в таблицу {}", fileName, tableName);
+                    } catch (Exception e) {
+                        logger.error("Ошибка при обработке файла {} из архива {}: {}", fileName, zipFileName, e);
+                        success = false;
+
+                        // Откат транзакции и удаление таблицы в случае ошибки
+                        if (connection != null) {
+                            try {
+                                connection.rollback();
+                                logger.info("Откат изменений для таблицы {} в архиве {}", tableName, zipFileName);
+
+                                if (isTableCreated) {
+                                    dropTableIfExists(connection, tableName);
+                                }
+                            } catch (SQLException rollbackEx) {
+                                logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, rollbackEx);
+                            }
+                        }
+                    } finally {
+                        // Закрываем соединение
+                        if (connection != null) {
+                            try {
+                                connection.close();
+                            } catch (SQLException e) {
+                                logger.error("Ошибка при закрытии соединения: {}", e.getMessage());
+                            }
+                        }
+                    }
                 }).exceptionally(ex -> {
-                    logger.error("Ошибка при обработке файла {} из архива {}: {}", extractedFile.getFileName(), zipFileName, ex);
+                    logger.error("Ошибка при обработке файла {}: {}", zipEntry.getName(), ex.getMessage());
                     success = false;
                     return null;
                 });
@@ -46,28 +114,37 @@ private void processZipFile(Path zipFilePath) {
 
         // Ждем завершения всех задач
         CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-        allOf.join(); // Дожидаемся выполнения всех операций
+        allOf.join(); // Ждем, пока все CompletableFuture завершатся
 
+        // Если все файлы успешно обработаны, перемещаем архив в success-директорию
         if (success) {
-            Path successDirPath = Paths.get(successDir);
-            moveFile(zipFilePath, successDirPath); // Перемещаем архив в папку успешных обработок
+            moveFile(zipFilePath, successDirPath);
             updateFileIterations(zipFilePath.getFileName(), "success", successDir, new Timestamp(System.currentTimeMillis()));
         } else {
-            moveFile(zipFilePath, errorDirPath); // Перемещаем в папку ошибок
+            // Если произошла ошибка, перемещаем архив в error-директорию
+            moveFile(zipFilePath, errorDirPath);
             updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
         }
+
     } catch (IOException e) {
         logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
         success = false;
     } finally {
-        // Удаляем временную директорию и файлы
+        // Удаляем временную директорию и её содержимое
         try {
             Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())  // Удаляем сначала файлы, потом директорию
+                .sorted(Comparator.reverseOrder())
                 .map(Path::toFile)
                 .forEach(File::delete);
         } catch (IOException e) {
-            logger.error("Ошибка при удалении временной папки {}: {}", tempDir, ExceptionFilter.displayError(e));
+            logger.error("Ошибка при удалении временной директории {}: {}", tempDir, ExceptionFilter.displayError(e));
         }
+    }
+
+    // Обработка завершена
+    if (!success) {
+        logger.error("Ошибка при обработке архива {}", zipFileName);
+        moveFile(zipFilePath, errorDirPath);
+        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, new Timestamp(System.currentTimeMillis()));
     }
 }
