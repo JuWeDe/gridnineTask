@@ -1,3 +1,51 @@
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))  // Разделяем заголовки по пробелам
+                .map(header -> "\"" + header.trim() + "\"") // Поддерживаем имена столбцов с #
+                .collect(Collectors.toList());
+
+        String insertSQL = generateInsertSQL(tableName, headers);
+
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
+
+            for (CSVRecord record : records) {
+                // Проверка значений в строке
+                for (int i = 0; i < headers.size(); i++) {
+                    String value = record.get(i);
+                    if (value == null || value.trim().isEmpty()) {
+                        // Логируем информацию о проблемной строке и возвращаем false
+                        logger.warn("Пропуск данных в строке {} в файле {}: {}", record.getRecordNumber(), csvFilePath.getFileName(), record);
+                        return false; // Возвращаем сигнал об ошибке данных
+                    } else {
+                        preparedStatement.setString(i + 1, value);
+                    }
+                }
+
+                preparedStatement.addBatch();
+                count++;
+
+                if (count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+                }
+            }
+
+            preparedStatement.executeBatch();
+        }
+    }
+    return true; // Возвращаем true, если импорт прошел успешно
+}
+
+
+
+zzzz
+
+
+
 private void processCsvFile(Path csvFilePath) {
     String fileName = csvFilePath.getFileName().toString();
     String tableName = getTableNameWithoutExtension(fileName);
@@ -28,37 +76,33 @@ private void processCsvFile(Path csvFilePath) {
         }
 
         // Импорт данных из CSV в таблицу
-        importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+        boolean isImportSuccessful = importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
+
+        if (!isImportSuccessful) {
+            // Прерывание обработки из-за пропуска данных
+            logger.warn("Ошибка данных: файл {} содержит пропуски и был перенесен в errorDir", fileName);
+            if (connection != null) {
+                connection.rollback();  // Откат транзакции
+                logger.info("Откат изменений для таблицы {}", tableName);
+
+                if (isTableCreated) {
+                    dropTableIfExists(connection, tableName);  // Удаляем таблицу, если она была создана
+                }
+            }
+            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, "Пропуск данных в файле", new Timestamp(System.currentTimeMillis()));
+            moveFile(csvFilePath, errorDirPath);  // Перемещаем файл в папку ошибок
+            processedFiles.remove(fileName);
+            return;  // Завершаем обработку файла
+        }
 
         if (connection != null) {
             connection.commit();  // Коммит транзакции, если импорт прошел успешно
         }
-        
+
         // Логирование успеха и перемещение файла
         updateFileIterations(csvFilePath.getFileName(), "success", successDir, "", new Timestamp(System.currentTimeMillis()));
         logger.info("Файл {} успешно обработан", fileName);
         moveFile(csvFilePath, Paths.get(successDir));
-        processedFiles.remove(fileName);
-    } catch (DataIntegrityException e) {
-        // Обрабатываем ошибку с пропущенными значениями
-        logger.warn("Ошибка целостности данных при обработке файла {}: {}", fileName, e.getMessage());
-        try {
-            if (connection != null) {
-                connection.rollback();  // Откат изменений при обнаружении пропуска данных
-                logger.info("Откат изменений для таблицы {}", tableName);
-
-                if (isTableCreated) {
-                    // Удаление таблицы, если она была создана в процессе текущего импорта
-                    dropTableIfExists(connection, tableName);
-                }
-            }
-        } catch (SQLException rollbackEx) {
-            logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
-        }
-
-        // Логирование ошибки и перемещение файла в папку ошибок
-        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, "Пропуск данных в файле", new Timestamp(System.currentTimeMillis()));
-        moveFile(csvFilePath, errorDirPath);
         processedFiles.remove(fileName);
     } catch (Exception e) {
         // Обрабатываем другие ошибки
@@ -93,44 +137,3 @@ private void processCsvFile(Path csvFilePath) {
 
 
 
-private void importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))  // Разделяем заголовки по пробелам
-                .map(header -> "\"" + header.trim() + "\"") // Поддерживаем имена столбцов с #
-                .collect(Collectors.toList());
-
-        String insertSQL = generateInsertSQL(tableName, headers);
-
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
-
-            for (CSVRecord record : records) {
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = record.get(i);
-                    if (value == null || value.trim().isEmpty()) {
-                        // Логируем информацию о проблемной строке и выбрасываем исключение
-                        logger.warn("Пропуск данных в строке {} в файле {}: {}", record.getRecordNumber(), csvFilePath.getFileName(), record);
-                        
-                        // Прекращаем импорт и выбрасываем специальное исключение
-                        throw new DataIntegrityException("Обнаружен пропуск данных в строке " + record.getRecordNumber());
-                    } else {
-                        preparedStatement.setString(i + 1, value);
-                    }
-                }
-
-                preparedStatement.addBatch();
-                count++;
-
-                if (count % BATCH_SIZE == 0) {
-                    preparedStatement.executeBatch();
-                }
-            }
-
-            preparedStatement.executeBatch();
-        }
-    }
-}
