@@ -1,139 +1,141 @@
-private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws IOException, SQLException {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))  // Разделяем заголовки по пробелам
-                .map(header -> "\"" + header.trim() + "\"") // Поддерживаем имена столбцов с #
-                .collect(Collectors.toList());
-
-        String insertSQL = generateInsertSQL(tableName, headers);
-
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
-
-            for (CSVRecord record : records) {
-                // Проверка значений в строке
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = record.get(i);
-                    if (value == null || value.trim().isEmpty()) {
-                        // Логируем информацию о проблемной строке и возвращаем false
-                        logger.warn("Пропуск данных в строке {} в файле {}: {}", record.getRecordNumber(), csvFilePath.getFileName(), record);
-                        return false; // Возвращаем сигнал об ошибке данных
-                    } else {
-                        preparedStatement.setString(i + 1, value);
-                    }
-                }
-
-                preparedStatement.addBatch();
-                count++;
-
-                if (count % BATCH_SIZE == 0) {
-                    preparedStatement.executeBatch();
-                }
-            }
-
-            preparedStatement.executeBatch();
-        }
-    }
-    return true; // Возвращаем true, если импорт прошел успешно
-}
-
-
-
-zzzz
-
-
-
-private void processCsvFile(Path csvFilePath) {
-    String fileName = csvFilePath.getFileName().toString();
-    String tableName = getTableNameWithoutExtension(fileName);
-    boolean isTableCreated = false;
-    Connection connection = null;
+private void processZipFile(Path zipFilePath) {
+    String zipFileName = zipFilePath.getFileName().toString();
+    boolean success = true;
     Path errorDirPath = Paths.get(errorDir);
-
-    // Проверка, что файл был загружен полностью
-    if (isFileFullyUploaded(csvFilePath, 5, 2000)) {
-        logger.error("Файл {} не был загружен полностью", csvFilePath.getFileName());
-        moveFile(csvFilePath, errorDirPath);
-        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, "Файл не был загружен полностью", new Timestamp(System.currentTimeMillis()));
+    
+    // Проверка полной загрузки архива
+    if (isFileFullyUploaded(zipFilePath, 5, 2000)) {
+        logger.error("Архив {} не загружен", zipFileName);
+        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Архив не загружен", new Timestamp(System.currentTimeMillis()));
+        moveFile(zipFilePath, errorDirPath);
         return;
     }
 
+    Path tempDir;
     try {
+        tempDir = Files.createTempDirectory("zip_extract_");
+    } catch (IOException e) {
+        logger.error("Не удалось создать временную папку" + ExceptionFilter.displayError(e));
+        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Не удалось создать временную папку", new Timestamp(System.currentTimeMillis()));
+        moveFile(zipFilePath, errorDirPath);
+        return;
+    }
+
+    List<Path> extractedFiles = new ArrayList<>(); // Для хранения путей извлеченных файлов
+
+    try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
+        ZipEntry zipEntry;
+
+        // Обработка всех файлов архива
+        while ((zipEntry = zis.getNextEntry()) != null) {
+            if (zipEntry.getName().endsWith(".csv")) {
+                // Извлекаем файл во временную директорию
+                Path extractedFilePath = tempDir.resolve(zipEntry.getName());
+                Files.createDirectories(extractedFilePath.getParent());  // Создаем директории, если не существуют
+                Files.copy(zis, extractedFilePath, StandardCopyOption.REPLACE_EXISTING);
+                extractedFiles.add(extractedFilePath);  // Добавляем файл в список извлеченных
+            }
+        }
+
+        // Обрабатываем все извлеченные файлы параллельно
+        CompletableFuture<Void> allTasks = CompletableFuture.allOf(
+            extractedFiles.stream()
+                .map(extractedFilePath -> CompletableFuture.runAsync(() -> {
+                    processSingleCsvFile(zipFileName, extractedFilePath, errorDirPath);
+                }))
+                .toArray(CompletableFuture[]::new)
+        );
+
+        // Ждем завершения всех задач
+        allTasks.join();
+
+    } catch (IOException e) {
+        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
+        success = false;
+    } finally {
+        try {
+            Files.walk(tempDir)
+                .sorted(Comparator.reverseOrder())
+                .map(Path::toFile)
+                .forEach(File::delete);  // Удаляем временную директорию
+
+        } catch (IOException e) {
+            logger.error("Ошибка при очистке временной папки {}:", tempDir + ExceptionFilter.displayError(e));
+        }
+    }
+
+    // Если какой-либо файл не обработан успешно, помечаем архив как ошибочный
+    if (!success) {
+        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Архив не обработан", new Timestamp(System.currentTimeMillis()));
+        moveFile(zipFilePath, errorDirPath);
+    } else {
+        moveFile(zipFilePath, Paths.get(successDir));  // Перемещаем архив в success
+    }
+}
+
+// Обработка одного CSV файла с транзакцией
+private void processSingleCsvFile(String zipFileName, Path extractedFilePath, Path errorDirPath) {
+    String fileName = extractedFilePath.getFileName().toString();
+    String tableName = getTableNameWithoutExtension(fileName);
+    boolean isTableCreated = false;
+    Connection connection = null;
+
+    try {
+        if (isFileFullyUploaded(extractedFilePath, 5, 2000)) {
+            logger.error("Файл {} из архива {} не загружен", extractedFilePath.getFileName(), zipFileName);
+            throw new IllegalStateException("Файл не загружен полностью.");
+        }
+
+        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+
+        char delimiter = detectDelimiter(extractedFilePath);
+
+        // Получаем соединение для текущего файла
         connection = getConnectionBasedOnFileName(fileName);
         if (connection != null) {
             connection.setAutoCommit(false);  // Отключаем автокоммит для управления транзакцией вручную
         }
 
-        char delimiter = detectDelimiter(csvFilePath);
-
-        // Проверка существования таблицы
+        // Проверяем существование таблицы и её столбцов
         if (!doesTableExist(connection, tableName)) {
-            createTableFromCsv(csvFilePath, tableName, connection, delimiter);
+            createTableFromCsv(extractedFilePath, tableName, connection, delimiter);
             isTableCreated = true;
         }
 
         // Импорт данных из CSV в таблицу
-        boolean isImportSuccessful = importCsvToDatabaseBatch(csvFilePath, tableName, connection, delimiter);
-
+        boolean isImportSuccessful = importCsvToDatabaseBatch(extractedFilePath, tableName, connection, delimiter);
         if (!isImportSuccessful) {
-            // Прерывание обработки из-за пропуска данных
-            logger.warn("Ошибка данных: файл {} содержит пропуски и был перенесен в errorDir", fileName);
-            if (connection != null) {
-                connection.rollback();  // Откат транзакции
-                logger.info("Откат изменений для таблицы {}", tableName);
+            throw new SQLException("Ошибка данных в файле " + fileName);
+        }
+
+        if (connection != null) {
+            connection.commit();  // Коммитим транзакцию, если все успешно
+        }
+
+    } catch (Exception e) {
+        logger.error("Ошибка при обработке файла {} из архива {}: {}", fileName, zipFileName, e.getMessage());
+        if (connection != null) {
+            try {
+                connection.rollback();  // Откат изменений при ошибке
+                logger.info("Откат изменений для таблицы {} в архиве {}", tableName, zipFileName);
 
                 if (isTableCreated) {
                     dropTableIfExists(connection, tableName);  // Удаляем таблицу, если она была создана
                 }
+
+            } catch (SQLException rollbackEx) {
+                logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
             }
-            updateFileIterations(csvFilePath.getFileName(), "error", errorDir, "Пропуск данных в файле", new Timestamp(System.currentTimeMillis()));
-            moveFile(csvFilePath, errorDirPath);  // Перемещаем файл в папку ошибок
-            processedFiles.remove(fileName);
-            return;  // Завершаем обработку файла
         }
-
-        if (connection != null) {
-            connection.commit();  // Коммит транзакции, если импорт прошел успешно
-        }
-
-        // Логирование успеха и перемещение файла
-        updateFileIterations(csvFilePath.getFileName(), "success", successDir, "", new Timestamp(System.currentTimeMillis()));
-        logger.info("Файл {} успешно обработан", fileName);
-        moveFile(csvFilePath, Paths.get(successDir));
-        processedFiles.remove(fileName);
-    } catch (Exception e) {
-        // Обрабатываем другие ошибки
-        logger.error("Ошибка при импортировании файла {} в БД: {}", fileName, ExceptionFilter.displayError(e));
-        try {
-            if (connection != null) {
-                connection.rollback();  // Откат изменений при общей ошибке
-                logger.info("Откат изменений для таблицы {}", tableName);
-
-                if (isTableCreated) {
-                    dropTableIfExists(connection, tableName);
-                }
-            }
-        } catch (SQLException rollbackEx) {
-            logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
-        }
-
-        // Логирование ошибки и перемещение файла в папку ошибок
-        updateFileIterations(csvFilePath.getFileName(), "error", errorDir, "Ошибка обработки файла", new Timestamp(System.currentTimeMillis()));
-        moveFile(csvFilePath, errorDirPath);
-        processedFiles.remove(fileName);
+        moveFile(extractedFilePath, errorDirPath);  // Перемещаем файл в директорию ошибок
+        throw new RuntimeException(e);  // Прерываем обработку архива
     } finally {
         if (connection != null) {
             try {
                 connection.close();
             } catch (SQLException e) {
-                logger.error("Ошибка при закрытии соединения: {}", ExceptionFilter.displayError(e));
+                logger.error("Ошибка при закрытии соединения для файла {}: {}", fileName, ExceptionFilter.displayError(e));
             }
         }
     }
 }
-
-
-
