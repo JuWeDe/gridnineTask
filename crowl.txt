@@ -2,7 +2,7 @@ private void processZipFile(Path zipFilePath) {
     String zipFileName = zipFilePath.getFileName().toString();
     boolean success = true;
     Path errorDirPath = Paths.get(errorDir);
-    
+
     // Проверка полной загрузки архива
     if (isFileFullyUploaded(zipFilePath, 5, 2000)) {
         logger.error("Архив {} не загружен", zipFileName);
@@ -22,6 +22,8 @@ private void processZipFile(Path zipFilePath) {
     }
 
     List<Path> extractedFiles = new ArrayList<>(); // Для хранения путей извлеченных файлов
+    ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    List<CompletableFuture<Void>> futures = new ArrayList<>();
 
     try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
         ZipEntry zipEntry;
@@ -34,23 +36,33 @@ private void processZipFile(Path zipFilePath) {
                 Files.createDirectories(extractedFilePath.getParent());  // Создаем директории, если не существуют
                 Files.copy(zis, extractedFilePath, StandardCopyOption.REPLACE_EXISTING);
                 extractedFiles.add(extractedFilePath);  // Добавляем файл в список извлеченных
+
+                // Добавляем задачу для параллельной обработки файла
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    processSingleCsvFile(zipFileName, extractedFilePath, errorDirPath);
+                }, executorService).exceptionally(ex -> {
+                    // Если случилась ошибка, ставим success в false и логируем
+                    logger.error("Ошибка при обработке файла {} из архива {}: {}", extractedFilePath, zipFileName, ex.getMessage());
+                    success = false;
+                    return null;
+                });
+                futures.add(future);
             }
         }
 
-        // Обрабатываем все извлеченные файлы параллельно
-        CompletableFuture<Void> allTasks = CompletableFuture.allOf(
-            extractedFiles.stream()
-                .map(extractedFilePath -> CompletableFuture.runAsync(() -> {
-                    processSingleCsvFile(zipFileName, extractedFilePath, errorDirPath);
-                }))
-                .toArray(CompletableFuture[]::new)
-        );
-
         // Ждем завершения всех задач
-        allTasks.join();
+        CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
 
-    } catch (IOException e) {
-        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
+        // Блокируем выполнение до завершения всех задач
+        allOf.join();
+
+        // Если хотя бы одна задача завершилась с ошибкой, все неуспешно
+        if (!success) {
+            throw new RuntimeException("Обнаружена ошибка при обработке архива.");
+        }
+
+    } catch (Exception e) {
+        logger.error("Ошибка при распаковке или обработке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
         success = false;
     } finally {
         try {
@@ -58,18 +70,19 @@ private void processZipFile(Path zipFilePath) {
                 .sorted(Comparator.reverseOrder())
                 .map(Path::toFile)
                 .forEach(File::delete);  // Удаляем временную директорию
-
         } catch (IOException e) {
             logger.error("Ошибка при очистке временной папки {}:", tempDir + ExceptionFilter.displayError(e));
         }
+        executorService.shutdown();  // Завершаем работу пула потоков
     }
 
-    // Если какой-либо файл не обработан успешно, помечаем архив как ошибочный
+    // Если хотя бы один файл не был обработан успешно, перемещаем архив в директорию ошибок
     if (!success) {
         updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Архив не обработан", new Timestamp(System.currentTimeMillis()));
         moveFile(zipFilePath, errorDirPath);
     } else {
-        moveFile(zipFilePath, Paths.get(successDir));  // Перемещаем архив в success
+        // Если все файлы успешны, перемещаем архив в директорию успеха
+        moveFile(zipFilePath, Paths.get(successDir));  
     }
 }
 
