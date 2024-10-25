@@ -1,282 +1,46 @@
-private void processSingleCsvFile(String zipFileName, Path extractedFilePath, Path errorDirPath) {
-    String fileName = extractedFilePath.getFileName().toString();
-    String tableName = getTableNameWithoutExtension(fileName);
-    boolean isTableCreated = false;
-    Connection connection = null;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.stereotype.Service;
 
-    try {
-        if (isFileFullyUploaded(extractedFilePath, 5, 2000)) {
-            logger.error("Файл {} из архива {} не загружен", extractedFilePath.getFileName(), zipFileName);
-            throw new IllegalStateException("Файл не загружен полностью.");
-        }
+import javax.annotation.PostConstruct;
+import javax.sql.DataSource;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.stream.Collectors;
 
-        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
+@Service
+public class DatabaseInitializer {
 
-        char delimiter = detectDelimiter(extractedFilePath);
+    @Autowired
+    private DataSource dataSource;
 
-        // Получаем соединение для текущего файла
-        connection = getConnectionBasedOnFileName(fileName);
-        if (connection != null) {
-            connection.setAutoCommit(false);  // Отключаем автокоммит для управления транзакцией вручную
-        }
-
-        // Получаем минимальный и максимальный идентификаторы строк до импорта
-        long minIdBeforeImport = getMaxRowId(connection, tableName);  // Получаем максимальный id до начала импорта
-
-        // Проверяем существование таблицы и её столбцов
-        if (!doesTableExist(connection, tableName)) {
-            createTableFromCsv(extractedFilePath, tableName, connection, delimiter);
-            isTableCreated = true;
-        }
-
-        // Импорт данных из CSV в таблицу
-        boolean isImportSuccessful = importCsvToDatabaseBatch(extractedFilePath, tableName, connection, delimiter);
-        if (!isImportSuccessful) {
-            throw new SQLException("Ошибка данных в файле " + fileName);
-        }
-
-        // Получаем максимальный идентификатор после импорта
-        long maxIdAfterImport = getMaxRowId(connection, tableName);
-
-        if (connection != null) {
-            connection.commit();  // Коммитим транзакцию, если все успешно
-        }
-
-        // Логируем успешный импорт в таблицу логов
-        logImportSuccess(fileName, tableName, minIdBeforeImport + 1, maxIdAfterImport, connection);
-
-    } catch (Exception e) {
-        logger.error("Ошибка при обработке файла {} из архива {}: {}", fileName, zipFileName, e.getMessage());
-        if (connection != null) {
-            try {
-                connection.rollback();  // Откат изменений при ошибке
-                logger.info("Откат изменений для таблицы {} в архиве {}", tableName, zipFileName);
-
-                if (isTableCreated) {
-                    dropTableIfExists(connection, tableName);  // Удаляем таблицу, если она была создана
-                }
-
-            } catch (SQLException rollbackEx) {
-                logger.error("Ошибка при откате изменений для таблицы {}: {}", tableName, ExceptionFilter.displayError(rollbackEx));
+    @PostConstruct
+    public void initializeDatabase() {
+        // Чтение data.sql из classpath без использования ResourceLoader
+        try (InputStream inputStream = getClass().getClassLoader().getResourceAsStream("data.sql")) {
+            if (inputStream == null) {
+                throw new IllegalArgumentException("data.sql not found in resources");
             }
-        }
-        moveFile(extractedFilePath, errorDirPath);  // Перемещаем файл в директорию ошибок
-        throw new RuntimeException(e);  // Прерываем обработку архива
-    } finally {
-        if (connection != null) {
-            try {
-                connection.close();
+
+            // Преобразуем InputStream в String
+            String sqlScript = new BufferedReader(new InputStreamReader(inputStream))
+                    .lines()
+                    .collect(Collectors.joining("\n"));
+
+            // Выполнение SQL скрипта
+            try (Connection connection = dataSource.getConnection()) {
+                ScriptUtils.executeSqlScript(connection, new org.springframework.core.io.InputStreamResource(inputStream));
+                System.out.println("SQL script executed successfully.");
             } catch (SQLException e) {
-                logger.error("Ошибка при закрытии соединения для файла {}: {}", fileName, ExceptionFilter.displayError(e));
+                e.printStackTrace();
+                System.err.println("Failed to execute SQL script: " + e.getMessage());
             }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.err.println("Failed to load SQL script: " + e.getMessage());
         }
     }
-}
-
-// Метод для получения максимального идентификатора строки
-private long getMaxRowId(Connection connection, String tableName) throws SQLException {
-    String query = "SELECT COALESCE(MAX(id), 0) FROM " + tableName;  // Если таблица пуста, возвращаем 0
-    try (Statement stmt = connection.createStatement();
-         ResultSet rs = stmt.executeQuery(query)) {
-        if (rs.next()) {
-            return rs.getLong(1);
-        }
-        return 0;
-    }
-}
-
-// Метод для записи логов об успешном импорте
-private void logImportSuccess(String fileName, String tableName, long minId, long maxId, Connection connection) {
-    String insertLogQuery = "INSERT INTO import_logs (file_name, table_name, min_id, max_id, imported_at, status) " +
-                            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)";
-    try (PreparedStatement pstmt = connection.prepareStatement(insertLogQuery)) {
-        pstmt.setString(1, fileName);
-        pstmt.setString(2, tableName);
-        pstmt.setLong(3, minId);
-        pstmt.setLong(4, maxId);
-        pstmt.setString(5, "success");
-        pstmt.executeUpdate();
-        logger.info("Успешный импорт файла {}: добавлены строки с идентификаторами от {} до {} в таблицу {}", fileName, minId, maxId, tableName);
-    } catch (SQLException e) {
-        logger.error("Ошибка при логировании импорта файла {}: {}", fileName, ExceptionFilter.displayError(e));
-    }
-}
-
-
-nee gen 
-
-
-
-private void processZipFile(Path zipFilePath) {
-    String zipFileName = zipFilePath.getFileName().toString();
-    boolean success = true;
-    Path errorDirPath = Paths.get(errorDir);
-    
-    // Проверяем загрузку файла
-    if (isFileFullyUploaded(zipFilePath, 5, 2000)) {
-        logger.error("Архив {} не загружен", zipFileName);
-        updateFileIterations(zipFilePath.getFileName(), "error", errorDir,"Архив не загружен", new Timestamp(System.currentTimeMillis()));
-        moveFile(zipFilePath, errorDirPath);
-        return;
-    }
-    
-    Path tempDir;
-    try {
-        tempDir = Files.createTempDirectory("zip_extract_");
-    } catch (IOException e) {
-        logger.error("Не удалось создать временную папку" + ExceptionFilter.displayError(e));
-        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Не удалось создать временную папку", new Timestamp(System.currentTimeMillis()));
-        moveFile(zipFilePath, errorDirPath);
-        return;
-    }
-
-    List<Path> extractedFiles = new ArrayList<>(); // Для хранения путей извлеченных файлов
-    boolean anyRollback = false; // Флаг, указывающий на откат
-
-    try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFilePath))) {
-        ZipEntry zipEntry;
-        
-        // Создаем таблицу логов, если она не существует
-        createLogsTableIfNotExists();
-
-        while ((zipEntry = zis.getNextEntry()) != null) {
-            if (zipEntry.getName().endsWith(".csv")) {
-                // Извлекаем файл во временную директорию
-                Path extractedFilePath = tempDir.resolve(zipEntry.getName());
-                Files.createDirectories(extractedFilePath.getParent());  // Создаем директории, если не существуют
-                Files.copy(zis, extractedFilePath, StandardCopyOption.REPLACE_EXISTING);
-                extractedFiles.add(extractedFilePath);  // Добавляем файл в список извлеченных
-
-                // Обрабатываем CSV файл
-                try {
-                    String fileName = extractedFilePath.getFileName().toString();
-                    String tableName = getTableNameWithoutExtension(fileName);
-                    boolean isTableCreated = false;
-                    Connection connection = null;
-
-                    if (isFileFullyUploaded(extractedFilePath, 5, 2000)) {
-                        logger.error("Файл {} из архива {} не загружен", extractedFilePath.getFileName(), zipFileName);
-                    }
-                    
-                    try {
-                        connection = getConnectionBasedOnFileName(fileName);
-                        if (connection != null) {
-                            connection.setAutoCommit(false);  // Отключаем автокоммит для управления транзакцией вручную
-                        }
-
-                        logger.info("Импортируем файл {} в таблицу {}", fileName, tableName);
-                        char delimiter = detectDelimiter(extractedFilePath);
-
-                        // Проверяем существование таблицы и её столбцов
-                        if (!doesTableExist(connection, tableName)) {
-                            createTableFromCsv(extractedFilePath, tableName, connection, delimiter);
-                            isTableCreated = true;
-                        }
-
-                        // Импорт данных из CSV в таблицу
-                        int initialRowCount = getRowCount(connection, tableName);
-                        boolean isImportSuccessful = importCsvToDatabaseBatch(extractedFilePath, tableName, connection, delimiter);
-
-                        if (!isImportSuccessful) {
-                            anyRollback = true; // Устанавливаем флаг для отката
-                            logger.warn("Ошибка данных: файл {} содержит пропуски и был перенесен в errorDir", fileName);
-                        }
-
-                        if (connection != null) {
-                            connection.commit();  // Коммитим транзакцию, если все успешно
-                        }
-
-                        // Логируем информацию о количестве импортированных строк
-                        int finalRowCount = getRowCount(connection, tableName);
-                        logImportDetails(connection, tableName, initialRowCount, finalRowCount);
-
-                        logger.info("Файл {} из архива успешно обработан ", fileName);
-                    } catch (Exception e) {
-                        logger.error("Ошибка при импортировании файла {} из архива {}: {}", fileName, zipFileName, ExceptionFilter.displayError(e));
-                        anyRollback = true; // Устанавливаем флаг для отката
-                    } finally {
-                        if (connection != null) {
-                            if (anyRollback) {
-                                connection.rollback();  // Откат транзакции
-                                logger.info("Откат изменений для таблицы {}", tableName);
-                                
-                                if (isTableCreated) {
-                                    dropTableIfExists(connection, tableName);  // Удаляем таблицу, если она была создана
-                                }
-                            } else {
-                                connection.commit();  // Коммитим транзакцию, если все успешно
-                            }
-                        }
-                    }
-                } catch (Exception ex) {
-                    logger.error("Ошибка при обработке CSV файла {}: {}", extractedFilePath, ex.getMessage());
-                    success = false;  // Устанавливаем флаг ошибки
-                    anyRollback = true; // Устанавливаем флаг для отката
-                    break;  // Прерываем обработку при первой ошибке
-                }
-            }
-        }
-    } catch (IOException e) {
-        logger.error("Ошибка при распаковке архива {}: {}", zipFileName, ExceptionFilter.displayError(e));
-        success = false;
-    } finally {
-        try {
-            Files.delete(tempDir);  // Удаляем саму временную директорию
-        } catch (IOException e) {
-            logger.error("Ошибка при очистке временной папки {}:", tempDir + ExceptionFilter.displayError(e));
-        }
-    }
-    
-    // Если хотя бы один файл вызвал откат
-    if (anyRollback) {
-        logger.error("Неудачная обработка архива: {}", zipFileName);
-        updateFileIterations(zipFilePath.getFileName(), "error", errorDir, "Архив не обработан", new Timestamp(System.currentTimeMillis()));
-        moveFile(zipFilePath, errorDirPath);
-    } else {
-        // Перемещаем ZIP файл в директорию успешной обработки
-        updateFileIterations(zipFilePath.getFileName(), "success", successDir, "Архив обработан", new Timestamp(System.currentTimeMillis()));
-        moveFile(zipFilePath, successDirPath);
-    }
-}
-
-// Метод для создания таблицы логов
-private void createLogsTableIfNotExists() {
-    String createTableSQL = "CREATE TABLE IF NOT EXISTS logs (" +
-            "id SERIAL PRIMARY KEY, " +
-            "table_name VARCHAR(255), " +
-            "initial_row_count INT, " +
-            "final_row_count INT, " +
-            "timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
-            ")";
-    try (Connection connection = getConnection(); 
-         Statement stmt = connection.createStatement()) {
-        stmt.executeUpdate(createTableSQL);
-    } catch (SQLException e) {
-        logger.error("Ошибка при создании таблицы логов: {}", ExceptionFilter.displayError(e));
-    }
-}
-
-// Метод для логирования информации об импорте
-private void logImportDetails(Connection connection, String tableName, int initialRowCount, int finalRowCount) {
-    String insertLogSQL = "INSERT INTO logs (table_name, initial_row_count, final_row_count) VALUES (?, ?, ?)";
-    try (PreparedStatement pstmt = connection.prepareStatement(insertLogSQL)) {
-        pstmt.setString(1, tableName);
-        pstmt.setInt(2, initialRowCount);
-        pstmt.setInt(3, finalRowCount);
-        pstmt.executeUpdate();
-    } catch (SQLException e) {
-        logger.error("Ошибка при записи логов импорта: {}", ExceptionFilter.displayError(e));
-    }
-}
-
-// Метод для получения количества строк в таблице
-private int getRowCount(Connection connection, String tableName) throws SQLException {
-    String countSQL = "SELECT COUNT(*) FROM " + tableName;
-    try (Statement stmt = connection.createStatement();
-         ResultSet rs = stmt.executeQuery(countSQL)) {
-        if (rs.next()) {
-            return rs.getInt(1);
-        }
-    }
-    return 0;
 }
