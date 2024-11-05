@@ -1,4 +1,24 @@
-Конечно, вот обновленный код, в котором вместо префикса alal можно использовать любую другую последовательность символов:
+Вот реализация без структуры проекта:
+
+### Application.java
+
+package com.example;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class Application {
+
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
+
+
+### FileCopyService.java
+
+package com.example.service;
 
 import java.io.File;
 import java.io.IOException;
@@ -9,16 +29,20 @@ import java.util.GregorianCalendar;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class FileCopierWithCustomPrefixAndFullDateChange {
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+@Service
+public class FileCopyService {
+    
+    private static final Logger logger = LoggerFactory.getLogger(FileCopyService.class);
     
     private static final Pattern FILE_NAME_PATTERN = Pattern.compile("(.*?)_(.*)\\..*");
     private static final SimpleDateFormat DATE_TIME_FORMATTER = new SimpleDateFormat("yyyyMMddHHmm");
     
-    public static void main(String[] args) throws IOException {
-        String sourceFilePath = "/home/dow/downloads/my_prefix_202012091158.txt"; // Путь к исходному файлу
+    public void createCopies(String sourceFilePath, int numberOfCopies) throws IOException {
         File sourceFile = new File(sourceFilePath);
-        
-        int numberOfCopies = 10; // Количество копий, которое нужно создать
         
         Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
         if (matcher.find()) {
@@ -34,20 +58,55 @@ public class FileCopierWithCustomPrefixAndFullDateChange {
                 File targetFile = new File("/home/dow/downloads/FileStorage", newFileName);
                 
                 Files.copy(sourceFile.toPath(), targetFile.toPath());
-                System.out.println("Файл успешно создан: " + targetFile.getAbsolutePath());
+                logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
             }
         } else {
-            System.out.println("Неверный формат имени файла.");
+            logger.error("Неверный формат имени файла.");
         }
     }
 }
 
 
-### Изменения:
-1. Регулярное выражение:
-   - Обновлено регулярное выражение (.*?)_(.*)\..*. Оно теперь захватывает любой префикс перед первым символом _ и оставляет его в первой группе захвата.
+### Контроллер FileController.java
 
-2. Использование произвольного префикса:
-   - Вместо жёстко заданного префикса alal теперь используется любая последовательность символов, найденная в начале имени файла перед первым символом _.
+package com.example.controller;
 
-Теперь, независимо от того, какой префикс у исходного файла, программа корректно обработает его и создаст копии с изменённым временем, сохраняя оригинальный префикс.
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class FileController {
+
+    @Autowired
+    private FileCopyService fileCopyService;
+
+    @PostMapping("/copy-files")
+    public String copyFiles(@RequestParam String sourceFilePath, @RequestParam int numberOfCopies) {
+        try {
+            fileCopyService.createCopies(sourceFilePath, numberOfCopies);
+            return "Файлы успешно созданы.";
+        } catch (IOException e) {
+            return "Произошла ошибка при создании файлов: " + e.getMessage();
+        }
+    }
+}
+
+
+### Настройки application.properties
+
+# Логирование
+logging.level.root=INFO
+logging.pattern.console=%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+
+
+### Сборка и запуск приложения
+
+Используйте Maven для сборки и запуска приложения:
+
+mvn clean package
+java -jar target/<your-app-name>.jar
+
+
+После этого вы сможете отправить POST-запрос на /copy-files с параметрами sourceFilePath и numberOfCopies, чтобы инициировать создание копий файлов.
