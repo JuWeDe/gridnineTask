@@ -1,112 +1,34 @@
-Вот реализация без структуры проекта:
+public void createCopies(Path sourceFilePath, int numberOfCopies) throws IOException {
+    File sourceFile = new File(sourceFilePath.toUri());
 
-### Application.java
-
-package com.example;
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-
-@SpringBootApplication
-public class Application {
-
-    public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
+    if (!sourceFile.exists()) {
+        logger.error("Исходный файл не найден: {}", sourceFile.getAbsolutePath());
+        throw new FileNotFoundException("Исходный файл не найден: " + sourceFile.getAbsolutePath());
     }
-}
 
+    File targetDir = new File("/home/rsbadin/downloads/FileStorage");
+    if (!targetDir.exists() || !targetDir.canWrite()) {
+        logger.error("Недостаточно прав для записи в директорию: {}", targetDir.getAbsolutePath());
+        throw new IOException("Нет прав на запись в директорию: " + targetDir.getAbsolutePath());
+    }
 
-### FileCopyService.java
+    Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
+    if (matcher.find()) {
+        String originalBaseName = matcher.group(1);
+        String extension = matcher.group(2);
 
-package com.example.service;
+        for (int i = 0; i < numberOfCopies; i++) {
+            Calendar calendar = new GregorianCalendar();
+            calendar.add(Calendar.MINUTE, i);
+            String newDateTime = DATE_TIME_FORMATTER.format(calendar.getTime());
+            String newFileName = originalBaseName + "_" + newDateTime + extension;
+            File targetFile = new File(targetDir, newFileName);
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.text.SimpleDateFormat;
-import java.util.Calendar;
-import java.util.GregorianCalendar;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-
-@Service
-public class FileCopyService {
-    
-    private static final Logger logger = LoggerFactory.getLogger(FileCopyService.class);
-    
-    private static final Pattern FILE_NAME_PATTERN = Pattern.compile("(.*?)_(.*)\\..*");
-    private static final SimpleDateFormat DATE_TIME_FORMATTER = new SimpleDateFormat("yyyyMMddHHmm");
-    
-    public void createCopies(String sourceFilePath, int numberOfCopies) throws IOException {
-        File sourceFile = new File(sourceFilePath);
-        
-        Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
-        if (matcher.find()) {
-            String customPrefix = matcher.group(1);
-            String originalBaseName = matcher.group(2);
-            String extension = sourceFile.getName().substring(matcher.end() - 1);
-            
-            for (int i = 0; i < numberOfCopies; i++) {
-                Calendar calendar = new GregorianCalendar();
-                calendar.add(Calendar.MINUTE, i); // Меняем временную метку на i минут вперед
-                String newDateTime = DATE_TIME_FORMATTER.format(calendar.getTime());
-                String newFileName = customPrefix + "_" + newDateTime + "." + extension;
-                File targetFile = new File("/home/dow/downloads/FileStorage", newFileName);
-                
-                Files.copy(sourceFile.toPath(), targetFile.toPath());
-                logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
-            }
-        } else {
-            logger.error("Неверный формат имени файла.");
+            Files.copy(sourceFile.toPath(), targetFile.toPath());
+            logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
         }
+    } else {
+        logger.error("Неверный формат имени файла: {}", sourceFile.getName());
+        throw new IllegalArgumentException("Неверный формат имени файла: " + sourceFile.getName());
     }
 }
-
-
-### Контроллер FileController.java
-
-package com.example.controller;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-
-@RestController
-public class FileController {
-
-    @Autowired
-    private FileCopyService fileCopyService;
-
-    @PostMapping("/copy-files")
-    public String copyFiles(@RequestParam String sourceFilePath, @RequestParam int numberOfCopies) {
-        try {
-            fileCopyService.createCopies(sourceFilePath, numberOfCopies);
-            return "Файлы успешно созданы.";
-        } catch (IOException e) {
-            return "Произошла ошибка при создании файлов: " + e.getMessage();
-        }
-    }
-}
-
-
-### Настройки application.properties
-
-# Логирование
-logging.level.root=INFO
-logging.pattern.console=%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
-
-
-### Сборка и запуск приложения
-
-Используйте Maven для сборки и запуска приложения:
-
-mvn clean package
-java -jar target/<your-app-name>.jar
-
-
-После этого вы сможете отправить POST-запрос на /copy-files с параметрами sourceFilePath и numberOfCopies, чтобы инициировать создание копий файлов.
