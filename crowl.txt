@@ -8,7 +8,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
-import java.util.Date;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,7 +16,8 @@ public class FileCopyService {
 
     private static final Logger logger = LoggerFactory.getLogger(FileCopyService.class);
 
-    private static final Pattern FILE_NAME_PATTERN = Pattern.compile("(.+)(\\..+)$"); // Корректное регулярное выражение
+    // Регулярное выражение для разделения основной части имени, временной метки и расширения
+    private static final Pattern FILE_NAME_PATTERN = Pattern.compile("(.+_)(\\d{12})(\\..+)$");
     private static final SimpleDateFormat DATE_TIME_FORMATTER = new SimpleDateFormat("yyyyMMddHHmm");
 
     public void createCopies(Path sourceFilePath, int numberOfCopies) throws IOException {
@@ -31,21 +31,23 @@ public class FileCopyService {
 
         Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
         if (matcher.find()) {
-            String originalBaseName = matcher.group(1); // Имя файла без расширения
-            String extension = matcher.group(2); // Расширение файла, включая точку
+            String baseName = matcher.group(1); // Основная часть имени файла, например, "spr_tb_results_"
+            String originalTimestamp = matcher.group(2); // Оригинальная временная метка, например, "202006020920"
+            String extension = matcher.group(3); // Расширение, например, ".csv"
 
-            // Начальная временная метка - текущая дата и время
+            // Используем текущую временную метку для первой копии
             Calendar calendar = Calendar.getInstance();
 
             for (int i = 0; i < numberOfCopies; i++) {
+                // Формируем уникальную временную метку для каждой копии
                 String newDateTime = DATE_TIME_FORMATTER.format(calendar.getTime());
-                String newFileName = originalBaseName + "_" + newDateTime + extension;
+                String newFileName = baseName + newDateTime + extension;
                 File targetFile = new File("/home/rsbadin/downloads/FileStorage", newFileName);
 
                 Files.copy(sourceFile.toPath(), targetFile.toPath());
                 logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
 
-                // Увеличиваем временную метку на 1 минуту, чтобы каждый файл имел уникальное имя
+                // Увеличиваем временную метку на 1 минуту для следующей копии
                 calendar.add(Calendar.MINUTE, 1);
             }
         } else {
