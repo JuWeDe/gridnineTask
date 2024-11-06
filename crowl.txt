@@ -1,34 +1,56 @@
-public void createCopies(Path sourceFilePath, int numberOfCopies) throws IOException {
-    File sourceFile = new File(sourceFilePath.toUri());
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
 
-    if (!sourceFile.exists()) {
-        logger.error("Исходный файл не найден: {}", sourceFile.getAbsolutePath());
-        throw new FileNotFoundException("Исходный файл не найден: " + sourceFile.getAbsolutePath());
-    }
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-    File targetDir = new File("/home/rsbadin/downloads/FileStorage");
-    if (!targetDir.exists() || !targetDir.canWrite()) {
-        logger.error("Недостаточно прав для записи в директорию: {}", targetDir.getAbsolutePath());
-        throw new IOException("Нет прав на запись в директорию: " + targetDir.getAbsolutePath());
-    }
+@Service
+public class FileCopyService {
 
-    Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
-    if (matcher.find()) {
-        String originalBaseName = matcher.group(1);
-        String extension = matcher.group(2);
+    private static final Logger logger = LoggerFactory.getLogger(FileCopyService.class);
 
-        for (int i = 0; i < numberOfCopies; i++) {
-            Calendar calendar = new GregorianCalendar();
-            calendar.add(Calendar.MINUTE, i);
-            String newDateTime = DATE_TIME_FORMATTER.format(calendar.getTime());
-            String newFileName = originalBaseName + "_" + newDateTime + extension;
-            File targetFile = new File(targetDir, newFileName);
+    private static final Pattern FILE_NAME_PATTERN = Pattern.compile("(.+)(\\..+)$"); // Корректное регулярное выражение
+    private static final SimpleDateFormat DATE_TIME_FORMATTER = new SimpleDateFormat("yyyyMMddHHmm");
 
-            Files.copy(sourceFile.toPath(), targetFile.toPath());
-            logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
+    public void createCopies(Path sourceFilePath, int numberOfCopies) throws IOException {
+        File sourceFile = new File(sourceFilePath.toUri());
+
+        // Проверка, существует ли исходный файл
+        if (!sourceFile.exists()) {
+            logger.error("Исходный файл не найден: {}", sourceFile.getAbsolutePath());
+            throw new IOException("Исходный файл не найден: " + sourceFile.getAbsolutePath());
         }
-    } else {
-        logger.error("Неверный формат имени файла: {}", sourceFile.getName());
-        throw new IllegalArgumentException("Неверный формат имени файла: " + sourceFile.getName());
+
+        Matcher matcher = FILE_NAME_PATTERN.matcher(sourceFile.getName());
+        if (matcher.find()) {
+            String originalBaseName = matcher.group(1); // Имя файла без расширения
+            String extension = matcher.group(2); // Расширение файла, включая точку
+
+            // Начальная временная метка - текущая дата и время
+            Calendar calendar = Calendar.getInstance();
+
+            for (int i = 0; i < numberOfCopies; i++) {
+                String newDateTime = DATE_TIME_FORMATTER.format(calendar.getTime());
+                String newFileName = originalBaseName + "_" + newDateTime + extension;
+                File targetFile = new File("/home/rsbadin/downloads/FileStorage", newFileName);
+
+                Files.copy(sourceFile.toPath(), targetFile.toPath());
+                logger.info("Файл успешно создан: {}", targetFile.getAbsolutePath());
+
+                // Увеличиваем временную метку на 1 минуту, чтобы каждый файл имел уникальное имя
+                calendar.add(Calendar.MINUTE, 1);
+            }
+        } else {
+            logger.error("Неверный формат имени файла: {}", sourceFile.getName());
+            throw new IllegalArgumentException("Неверный формат имени файла: " + sourceFile.getName());
+        }
     }
 }
