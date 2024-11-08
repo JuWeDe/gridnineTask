@@ -1,5 +1,4 @@
 private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) {
-    //noinspection deprecation
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
 
@@ -12,18 +11,22 @@ private void createTableFromCsv(Path csvFilePath, String tableName, Connection c
                 .collect(Collectors.joining(", "));
 
         String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
+
+        // Проверяем, был ли включен автокоммит до этого метода, и отключаем его для транзакции
+        boolean initialAutoCommitState = connection.getAutoCommit();
         
-        // Создаем блокировку для синхронизации
+        // Синхронизация для предотвращения конкурентного создания
         synchronized (FileImporterService.class) {
             try (Statement statement = connection.createStatement()) {
-                connection.setAutoCommit(false); // Начинаем транзакцию
-                statement.execute(createTableSQL); // 285 строка
-                connection.commit(); // Коммитим создание таблицы
+                connection.setAutoCommit(false);  // Отключаем автокоммит
+                statement.execute(createTableSQL); // Создание таблицы
+                connection.commit();  // Фиксируем изменения
             } catch (SQLException e) {
-                connection.rollback();
+                connection.rollback();  // Откат в случае ошибки
                 logger.error("Ошибка при создании таблицы {} из файла {}", tableName, csvFilePath.getFileName() + ExceptionFilter.displayError(e));
             } finally {
-                connection.setAutoCommit(true); // Восстанавливаем автокоммит
+                // Восстанавливаем исходный режим автокоммита
+                connection.setAutoCommit(initialAutoCommitState);
             }
         }
     } catch (IOException | SQLException e) {
