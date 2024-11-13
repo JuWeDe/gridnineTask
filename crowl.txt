@@ -1,35 +1,41 @@
-private void createTableFromCsv(Path csvFilePath, String tableName, Connection connection, char delimiter) {
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+public void deleteExpiredFile(Path path) {
+    String fileName = path.getFileName().toString();
 
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))
-                .collect(Collectors.toList());
-        headers.add("iteration_id");
-        String columns = headers.stream()
-                .map(header -> "\"" + header + "\" TEXT")
-                .collect(Collectors.joining(", "));
+    // Извлекаем расширение файла и маску
+    String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
+    String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
 
-        String createTableSQL = String.format("CREATE TABLE IF NOT EXISTS %s (%s)", tableName, columns);
+    FileCategory category = cacheService.getCategoryByMaskAndExtension(fileMask + "YYYYMMddHHmm");
 
-        // Проверяем, был ли включен автокоммит до этого метода, и отключаем его для транзакции
-        boolean initialAutoCommitState = connection.getAutoCommit();
-        
-        // Синхронизация для предотвращения конкурентного создания
-        synchronized (FileImporterService.class) {
-            try (Statement statement = connection.createStatement()) {
-                connection.setAutoCommit(false);  // Отключаем автокоммит
-                statement.execute(createTableSQL); // Создание таблицы
-                connection.commit();  // Фиксируем изменения
-            } catch (SQLException e) {
-                connection.rollback();  // Откат в случае ошибки
-                logger.error("Ошибка при создании таблицы {} из файла {}", tableName, csvFilePath.getFileName() + ExceptionFilter.displayError(e));
-            } finally {
-                // Восстанавливаем исходный режим автокоммита
-                connection.setAutoCommit(initialAutoCommitState);
+    if (path.toFile().exists()) {
+        if (category != null) {
+            int categoryDaysToExpire = category.getDaysToExpire();
+            try {
+                // Проверяем атрибуты файла
+                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                Instant accessInstant = attrs.lastAccessTime().toInstant();
+                LocalDateTime accessTime = LocalDateTime.ofInstant(accessInstant, ZoneId.systemDefault());
+                int daysSinceAccessed = (int) ChronoUnit.DAYS.between(accessTime, LocalDateTime.now());
+
+                // Проверка на истечение срока хранения
+                if (daysSinceAccessed > categoryDaysToExpire || daysSinceAccessed > daysToExpire) {
+                    try {
+                        Files.delete(path);  // Попытка удалить файл
+                        logger.info("Удален файл {}", fileName);
+                    } catch (IOException e) {
+                        // Логируем ошибку, если не удалось удалить файл
+                        logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
+                        // Дополнительно, можно в зависимости от ситуации провести попытку повторного удаления или другого действия
+                    }
+                }
+            } catch (IOException e) {
+                // Ошибка при чтении атрибутов файла
+                logger.error("Ошибка при чтении атрибутов файла {}: {}", fileName, e.getMessage());
             }
+        } else {
+            logger.warn("Не найдено категории для файла {}", fileName);
         }
-    } catch (IOException | SQLException e) {
-        logger.error("Ошибка при чтении csv файла {}", csvFilePath.getFileName() + ExceptionFilter.displayError(e));
+    } else {
+        logger.warn("Файл {} не существует, пропуск.", fileName);
     }
 }
