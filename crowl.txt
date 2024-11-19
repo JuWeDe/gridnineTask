@@ -1,41 +1,42 @@
-public void deleteExpiredFile(Path path) {
-    String fileName = path.getFileName().toString();
+#!/bin/bash
 
-    // Извлекаем расширение файла и маску
-    String fileExtension = fileName.substring(fileName.lastIndexOf(".") + 1);
-    String fileMask = fileName.replaceAll("\\d", "").replace("." + fileExtension, "");
+# Сохраняем рабочую директорию
+WORKING_DIR=$(pwd)
 
-    FileCategory category = cacheService.getCategoryByMaskAndExtension(fileMask + "YYYYMMddHHmm");
+# Спрашиваем у пользователя, хотите ли вы выполнить gradle clean build
+echo "Хотите выполнить gradle clean build? (y/n)"
+read -r RESPONSE
 
-    if (path.toFile().exists()) {
-        if (category != null) {
-            int categoryDaysToExpire = category.getDaysToExpire();
-            try {
-                // Проверяем атрибуты файла
-                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-                Instant accessInstant = attrs.lastAccessTime().toInstant();
-                LocalDateTime accessTime = LocalDateTime.ofInstant(accessInstant, ZoneId.systemDefault());
-                int daysSinceAccessed = (int) ChronoUnit.DAYS.between(accessTime, LocalDateTime.now());
+if [ "$RESPONSE" = "y" ]; then
+    # Выполняем сборку проекта
+    cd "$WORKING_DIR"
+    gradle clean build
+fi
 
-                // Проверка на истечение срока хранения
-                if (daysSinceAccessed > categoryDaysToExpire || daysSinceAccessed > daysToExpire) {
-                    try {
-                        Files.delete(path);  // Попытка удалить файл
-                        logger.info("Удален файл {}", fileName);
-                    } catch (IOException e) {
-                        // Логируем ошибку, если не удалось удалить файл
-                        logger.error("Ошибка при удалении файла {}: {}", fileName, e.getMessage());
-                        // Дополнительно, можно в зависимости от ситуации провести попытку повторного удаления или другого действия
-                    }
-                }
-            } catch (IOException e) {
-                // Ошибка при чтении атрибутов файла
-                logger.error("Ошибка при чтении атрибутов файла {}: {}", fileName, e.getMessage());
-            }
-        } else {
-            logger.warn("Не найдено категории для файла {}", fileName);
-        }
-    } else {
-        logger.warn("Файл {} не существует, пропуск.", fileName);
-    }
-}
+# Переходим в директорию с скомпилированным jar
+cd "$WORKING_DIR/build/libs"
+
+# Запускаем JAR файл
+java -jar F*
+
+# Возвращаемся в исходную директорию
+cd "$WORKING_DIR"
+
+
+stoppp
+
+
+#!/bin/bash
+
+# Находим PID процесса, связанного с вашим приложением
+APP_NAME="myapp.jar"
+
+# Ищем процесс по имени приложения и завершаем его
+PID=$(ps aux | grep "$APP_NAME" | grep -v grep | awk '{print $2}')
+
+if [ -n "$PID" ]; then
+    echo "Останавливаю приложение с PID $PID..."
+    kill -9 "$PID"
+else
+    echo "Процесс не найден."
+fi
