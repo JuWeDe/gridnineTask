@@ -1,42 +1,60 @@
 #!/bin/bash
 
-# Сохраняем рабочую директорию
-WORKING_DIR=$(pwd)
+# Папки, которые нужно удалить
+FOLDERS=(
+  "/opt/FileDistributorFolders"
+  "/opt/FileDistributorFolders/FileStorage"
+  "/opt/FileDistributorFolders/forImporter"
+  "/opt/FileDistributorFolders/errorDir"
+  "/opt/FileDistributorFolders/successDir"
+  "/opt/FileDistributorFolders/h2"
+  "/opt/FileDistributorFolders/docker"
+  "/opt/FileDistributorFolders/docker/volumes"
+  "/opt/FileDistributorFolders/docker/volumes/postgres"
+  "/opt/FileDistributorFolders/docker/volumes/grafana"
+  "/opt/FileDistributorFolders/docker/volumes/prometheus"
+)
 
-# Спрашиваем у пользователя, хотите ли вы выполнить gradle clean build
-echo "Хотите выполнить gradle clean build? (y/n)"
-read -r RESPONSE
+# Функция для удаления папок
+delete_folders() {
+  for folder in "${FOLDERS[@]}"; do
+    if [ -d "$folder" ]; then
+      echo "Удаляю папку: $folder"
+      sudo rm -rf "$folder"
+    fi
+  done
+}
 
-if [ "$RESPONSE" = "y" ]; then
-    # Выполняем сборку проекта
-    cd "$WORKING_DIR"
-    gradle clean build
-fi
+# Запрашиваем у пользователя, что делать с контейнерами и образами
+echo "Что вы хотите сделать?"
+echo "1. Удалить все контейнеры и образы"
+echo "2. Только остановить контейнеры"
+echo "3. Отмена"
+read -p "Введите номер (1, 2 или 3): " choice
 
-# Переходим в директорию с скомпилированным jar
-cd "$WORKING_DIR/build/libs"
+# Обрабатываем выбор пользователя
+case "$choice" in
+  1)
+    echo "Удаляю все контейнеры и образы..."
+    # Останавливаем все контейнеры и удаляем контейнеры и образы с помощью docker-compose
+    docker-compose down --volumes --rmi all
+    ;;
+  2)
+    echo "Останавливаю все контейнеры..."
+    # Останавливаем только контейнеры с помощью docker-compose
+    docker-compose stop
+    ;;
+  3)
+    echo "Отмена действия."
+    exit 0
+    ;;
+  *)
+    echo "Некорректный выбор, выполнение остановлено."
+    exit 1
+    ;;
+esac
 
-# Запускаем JAR файл
-java -jar F*
+# Удаляем папки
+delete_folders
 
-# Возвращаемся в исходную директорию
-cd "$WORKING_DIR"
-
-
-stoppp
-
-
-#!/bin/bash
-
-# Находим PID процесса, связанного с вашим приложением
-APP_NAME="myapp.jar"
-
-# Ищем процесс по имени приложения и завершаем его
-PID=$(ps aux | grep "$APP_NAME" | grep -v grep | awk '{print $2}')
-
-if [ -n "$PID" ]; then
-    echo "Останавливаю приложение с PID $PID..."
-    kill -9 "$PID"
-else
-    echo "Процесс не найден."
-fi
+echo "Процесс завершен."
