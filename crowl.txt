@@ -1,60 +1,26 @@
-#!/bin/bash
+public void watch(String fileName) throws IOException {
+        PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/" + fileName);
 
-# Папки, которые нужно удалить
-FOLDERS=(
-  "/opt/FileDistributorFolders"
-  "/opt/FileDistributorFolders/FileStorage"
-  "/opt/FileDistributorFolders/forImporter"
-  "/opt/FileDistributorFolders/errorDir"
-  "/opt/FileDistributorFolders/successDir"
-  "/opt/FileDistributorFolders/h2"
-  "/opt/FileDistributorFolders/docker"
-  "/opt/FileDistributorFolders/docker/volumes"
-  "/opt/FileDistributorFolders/docker/volumes/postgres"
-  "/opt/FileDistributorFolders/docker/volumes/grafana"
-  "/opt/FileDistributorFolders/docker/volumes/prometheus"
-)
+        Files.walk(Path.of("/"))
+                .filter(matcher::matches)
+                .findFirst()
+                .ifPresentOrElse(
+                        filePath -> {
+                            logger.info("Обнаружен файл: {}", filePath);
+                            CompletableFuture.runAsync(() -> processCsvFile(filePath))
+                                    .exceptionally(ex -> {
+                                        logger.error("Ошибка при обработке файла {}: {}",
+                                                filePath, ExceptionFilter.displayError(ex));
+                                        return null;
+                                    });
+                        },
+                        () -> logger.warning("Файл {} не найден.", fileName)
+                );
+    }
 
-# Функция для удаления папок
-delete_folders() {
-  for folder in "${FOLDERS[@]}"; do
-    if [ -d "$folder" ]; then
-      echo "Удаляю папку: $folder"
-      sudo rm -rf "$folder"
-    fi
-  done
+    private void processCsvFile(Path filePath) {
+        // Обработка CSV-файла
+    }
 }
 
-# Запрашиваем у пользователя, что делать с контейнерами и образами
-echo "Что вы хотите сделать?"
-echo "1. Удалить все контейнеры и образы"
-echo "2. Только остановить контейнеры"
-echo "3. Отмена"
-read -p "Введите номер (1, 2 или 3): " choice
 
-# Обрабатываем выбор пользователя
-case "$choice" in
-  1)
-    echo "Удаляю все контейнеры и образы..."
-    # Останавливаем все контейнеры и удаляем контейнеры и образы с помощью docker-compose
-    docker-compose down --volumes --rmi all
-    ;;
-  2)
-    echo "Останавливаю все контейнеры..."
-    # Останавливаем только контейнеры с помощью docker-compose
-    docker-compose stop
-    ;;
-  3)
-    echo "Отмена действия."
-    exit 0
-    ;;
-  *)
-    echo "Некорректный выбор, выполнение остановлено."
-    exit 1
-    ;;
-esac
-
-# Удаляем папки
-delete_folders
-
-echo "Процесс завершен."
