@@ -1,10 +1,4 @@
-for service in service1 service2 service3 service4; do
-  echo "Building $service..."
-  cd "$service" || continue
-  ./gradlew clean build
-  if [ $? != 0 ]; then
-    echo "Error building $service."
-    exit 1
-  fi
-  cd ..
-done
+FROM consul:latest
+COPY initParams.json /var/opt/initParams.json
+
+ENTRYPOINT ["/bin/sh", "-c", "echo 'Starting Consul KV Import' && cd /var/opt && consul kv import @initParams.json || echo 'Import failed' && consul agent -dev"]
