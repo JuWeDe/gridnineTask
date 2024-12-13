@@ -1,4 +1,17 @@
-FROM consul:latest
-COPY initParams.json /var/opt/initParams.json
+version: '3.8'
 
-ENTRYPOINT ["/bin/sh", "-c", "echo 'Starting Consul KV Import' && cd /var/opt && consul kv import @initParams.json || echo 'Import failed' && consul agent -dev"]
+services:
+  consul:
+    image: consul:latest
+    container_name: consul
+    volumes:
+      - ./initParams.json:/var/opt/initParams.json  # монтируем файл initParams.json
+    command: /bin/sh -c "cd /var/opt && consul kv import @initParams.json && consul agent -dev"  # выполняем команду
+    ports:
+      - "8500:8500"
+    networks:
+      - mynetwork
+
+networks:
+  mynetwork:
+    driver: bridge
