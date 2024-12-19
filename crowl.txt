@@ -1,17 +1,52 @@
-version: '3.8'
-
-services:
-  consul:
-    image: consul:latest
-    container_name: consul
-    volumes:
-      - ./initParams.json:/var/opt/initParams.json  # монтируем файл initParams.json
-    command: /bin/sh -c "cd /var/opt && consul kv import @initParams.json && consul agent -dev"  # выполняем команду
-    ports:
-      - "8500:8500"
-    networks:
-      - mynetwork
-
-networks:
-  mynetwork:
-    driver: bridge
+Highcharts.chart('container', {
+    chart: {
+        type: 'column'
+    },
+    title: {
+        text: 'Месячные данные по категориям (в рублях)'
+    },
+    xAxis: {
+        categories: [
+            'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+            'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+        ],
+        title: {
+            text: 'Месяцы'
+        }
+    },
+    yAxis: {
+        min: 0,
+        title: {
+            text: 'Сумма (в рублях)'
+        },
+        stackLabels: {
+            enabled: true,
+            style: {
+                fontWeight: 'bold',
+                color: (Highcharts.defaultOptions.title.style && Highcharts.defaultOptions.title.style.color) || 'gray'
+            }
+        }
+    },
+    tooltip: {
+        headerFormat: '<b>{point.x}</b><br>',
+        pointFormat: '{series.name}: {point.y}<br>Общая сумма: {point.stackTotal}'
+    },
+    plotOptions: {
+        column: {
+            stacking: 'normal'
+        }
+    },
+    series: [{
+        name: 'Категория 1',
+        data: [1500, 1600, 1400, 1450, 1550, 1650, 1700, 1800, 1900, 2000, 2100, 2200],
+        stack: 'Категория'
+    }, {
+        name: 'Категория 2',
+        data: [1200, 1300, 1250, 1400, 1450, 1500, 1600, 1700, 1800, 1900, 1950, 2000],
+        stack: 'Категория'
+    }, {
+        name: 'Категория 3',
+        data: [1000, 1100, 1050, 1100, 1150, 1200, 1250, 1300, 1350, 1400, 1450, 1500],
+        stack: 'Категория'
+    }]
+});
