@@ -1,95 +1,84 @@
-Для реализации прогресс-бара, который будет отображаться в логах и постоянно обновляться, тебе потребуется использовать библиотеку для работы с консолью, которая поддерживает вывод без переноса строки. Одной из таких библиотек является Jansi.
+dependencies {
+    // JavaFX зависимости
+    implementation 'org.openjfx:javafx-controls:17.0.2' // Зависимость для JavaFX
 
-### Шаги:
+    // JFoenix для улучшенных UI-компонентов (например, прогресс-бар)
+    implementation 'com.jfoenix:jfoenix:9.0.10'
 
-1. Добавь зависимость Jansi в проект:
-   Если используешь Maven, добавь следующую зависимость в pom.xml:
+    // Progress4j для текстовых прогресс-баров в консольных приложениях
+    implementation 'org.progressbar:progress4j:1.0.4'
 
-<dependency>
-    <groupId>org.fusesource.jansi</groupId>
-    <artifactId>jansi</artifactId>
-    <version>2.4.0</version>
-</dependency>
+    // Если используете JavaFX с Gradle, вам также нужно будет указать настройку для JavaFX:
+    runtimeOnly 'org.openjfx:javafx-graphics:17.0.2'
+}
 
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.application.Application;
+import javafx.scene.Scene;
+import javafx.scene.control.ProgressBar;
+import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
+import javafx.scene.text.Text;
+import javafx.stage.Stage;
+import javafx.util.Duration;
 
-Если используешь Gradle, то вот пример зависимости:
+public class ProgressBarDemo extends Application {
 
-implementation 'org.fusesource.jansi:jansi:2.4.0'
+    private ProgressBar progressBar;
+    private Text progressText;
 
+    @Override
+    public void start(Stage primaryStage) {
+        // 1. JavaFX ProgressBar
+        System.out.println("Используем: JavaFX ProgressBar");
 
-2. Создай метод для вывода прогресса:
-   Выводим прогресс бар, используя символы, такие как [, =, ]. Для этого создадим метод, который будет выводить прогресс от 0 до 100% и обновлять строку каждый раз при вызове.
+        // 2. JFoenix (можно заменить на реальную зависимость JFoenix, если необходимо)
+        System.out.println("Используем: JFoenix ProgressBar");
 
-Пример метода:
+        // 3. Прогресс-бар на основе стандартного Java Swing
+        System.out.println("Используем: Java Swing JProgressBar");
 
-import org.fusesource.jansi.AnsiConsole;
-import static org.fusesource.jansi.Ansi.*;
+        // 4. Прогресс-бар с анимацией (для консольных приложений, например Progress4j)
+        System.out.println("Используем: Progress4j (для консоли)");
 
-public class ProgressBar {
-    
-    private final int totalSteps;
-    private int currentStep = 0;
-    
-    public ProgressBar(int totalSteps) {
-        this.totalSteps = totalSteps;
+        // 5. Прогресс-бар с титульной рамкой (кастомная реализация)
+        System.out.println("Используем: Кастомный прогресс-бар с титульной рамкой");
+
+        // 6. Создание кастомного прогресс-бара с анимацией в JavaFX
+        progressBar = new ProgressBar(0);
+        progressBar.setStyle("-fx-accent: #5cb85c; -fx-background-color: #e0e0e0; -fx-background-radius: 10;");
+        
+        // Текст для отображения прогресса
+        progressText = new Text("0%");
+        progressText.setFill(Color.DARKGREEN);
+        progressText.setStyle("-fx-font-size: 16px;");
+
+        // Анимация прогресс-бара
+        Timeline timeline = new Timeline(
+                new KeyFrame(Duration.seconds(0), e -> updateProgress(0)),
+                new KeyFrame(Duration.seconds(10), e -> updateProgress(1))
+        );
+        timeline.setCycleCount(Timeline.INDEFINITE);
+        timeline.play();
+
+        StackPane root = new StackPane();
+        root.getChildren().addAll(progressBar, progressText);
+
+        Scene scene = new Scene(root, 300, 150);
+        primaryStage.setTitle("Custom ProgressBar");
+        primaryStage.setScene(scene);
+        primaryStage.show();
     }
-    
-    public void updateProgress() {
-        if (currentStep >= totalSteps) return;
-        
-        // Вычисляем процент выполнения
-        double percentComplete = ((double) currentStep / totalSteps) * 100;
-        
-        // Число символов '=' в прогрессе
-        int numEquals = (int) Math.round((percentComplete / 10));
-        
-        StringBuilder sb = new StringBuilder();
-        sb.append("\r["); // \r перемещает курсор в начало строки
-        for (int i = 0; i < numEquals; i++) {
-            sb.append("=");
-        }
-        for (int i = numEquals; i < 10; i++) {
-            sb.append(" ");
-        }
-        sb.append("] ").append(String.format("%.1f%%", percentComplete)); // Форматируем процент
 
-        AnsiConsole.out.println(sb.toString());
-        
-        currentStep++;
+    private void updateProgress(double progress) {
+        progressBar.setProgress(progress);
+        progressText.setText((int)(progress * 100) + "%");
+    }
+
+    public static void main(String[] args) {
+        launch(args);
     }
 }
 
 
-3. Используем созданный класс в твоем сервисе:
-   Теперь можно вызывать этот метод внутри сервиса, где требуется отслеживать прогресс выполнения задачи.
-
-Пример использования:
-
-public class MyService {
-    
-    public void doLongTask() {
-        int totalSteps = 50;
-        ProgressBar progressBar = new ProgressBar(totalSteps);
-        
-        for (int i = 0; i < totalSteps; i++) {
-            try {
-                Thread.sleep(200); // Имитация длительной операции
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-            
-            progressBar.updateProgress(); // Обновление прогресса
-        }
-        
-        System.out.println("\nЗадача завершена!");
-    }
-}
-
-
-### Как работает:
-
-- Метод updateProgress() вычисляет текущий прогресс и выводит его в виде прогресс-бара, состоящего из символов [, = и пробелов.
-- Использование символа \r позволяет переместить курсор в начало строки, благодаря чему строка обновляется, а не добавляется новая.
-- В конце каждой итерации выводится новый прогресс, и когда он достигает 100%, выводится сообщение о завершении задачи.
-
-Таким образом, у тебя получится создать прогресс-бар прямо в логах, который будет обновляться в реальном времени.
