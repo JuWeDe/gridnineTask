@@ -1,68 +1,23 @@
+Если размер прогресса должен быть рассчитан на основе размера **BATCH_SIZE**, нужно корректно рассчитать количество шагов прогресса, основываясь на общем количестве строк в файле и размере батча. Вот как это можно реализовать:
 
-Для добавления ProgressBar в данный код можно использовать отдельный сервис, который будет отслеживать состояние обработки файлов. ProgressBar будет обновляться по мере обработки батчей данных при импорте файла. Вот пример, как можно интегрировать ProgressBar:
-
-1. **Создайте класс `ProgressBarService`**, который будет отслеживать состояние обработки:
+### Изменение `ProgressBarService`
+Обновим логику для использования размера батча:
 
 ```java
-@Service
-@Slf4j
-public class ProgressBarService {
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    public void startProgress(String fileName, int totalSteps) {
-        progressBars.put(fileName, new ProgressBar(totalSteps));
-        log.info("Начало прогресса для файла {} с {} шагами", fileName, totalSteps);
-    }
-
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-            log.info("Прогресс для файла {}: {}%", fileName, progressBar.getPercentage());
-        }
-    }
-
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.remove(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-            log.info("Прогресс для файла {} завершён.", fileName);
-        }
-    }
-
-    @Slf4j
-    private static class ProgressBar {
-        private final int totalSteps;
-        private int completedSteps;
-
-        public ProgressBar(int totalSteps) {
-            this.totalSteps = totalSteps;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            this.completedSteps = Math.min(this.completedSteps + steps, totalSteps);
-        }
-
-        public synchronized int getPercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
-        }
-
-        public synchronized void complete() {
-            this.completedSteps = totalSteps;
-        }
-    }
+public void startProgress(String fileName, int totalRecords, int batchSize) {
+    int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов равно количеству батчей
+    progressBars.put(fileName, new ProgressBar(totalSteps));
+    log.info("Начало прогресса для файла {} с {} шагами (размер батча: {})", fileName, totalSteps, batchSize);
 }
 ```
 
-2. **Интеграция с `FileImporterService`:** Внедрите `ProgressBarService` в `FileImporterService` и обновляйте прогресс на разных этапах обработки файла.
-
-Пример изменения метода `importCsvToDatabaseBatch`:
+### Изменение метода `importCsvToDatabaseBatch`
+Теперь прогресс будет отслеживаться на уровне батчей, а не строк:
 
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    int totalRecords = countLines(csvFilePath) - 1; // Вычисляем количество записей, вычитая строку заголовка
-    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords);
+    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
+    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
 
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
@@ -77,6 +32,8 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
             List<CSVRecord> records = csvParser.getRecords();
             int count = 0;
+            int stepsCompleted = 0;
+
             for (CSVRecord record : records) {
                 for (int i = 0; i < headers.size(); i++) {
                     String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
@@ -96,11 +53,15 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
-                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), BATCH_SIZE);
+                    stepsCompleted++;
+                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем на 1 шаг (1 батч)
                 }
             }
-            preparedStatement.executeBatch();
-            progressBarService.updateProgress(csvFilePath.getFileName().toString(), count % BATCH_SIZE);
+            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
+            if (count % BATCH_SIZE != 0) {
+                stepsCompleted++;
+                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем для последнего батча
+            }
         }
     } catch (Exception e) {
         String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
@@ -114,8 +75,24 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 }
 ```
 
-3. **Изменения в других методах:** Аналогично обновляйте прогресс при обработке ZIP-файлов или других типов данных. Например, для ZIP-файла создайте общий прогресс и обновляйте его при обработке каждого файла внутри архива.
+### Подсчет строк файла
+Для подсчета строк в файле используем метод `countLines`:
 
-4. **Логирование прогресса:** Теперь `ProgressBarService` будет выводить процент выполнения задачи в логах. Это полезно для мониторинга.
+```java
+private int countLines(Path filePath) throws IOException {
+    try (Stream<String> lines = Files.lines(filePath)) {
+        return (int) lines.count();
+    }
+}
+```
 
-Этот подход позволяет гибко управлять состоянием прогресса для каждого файла и отображать шаги, такие как обработка батчей данных.
+### Итоговая логика
+1. **Прогресс бар** создается с количеством шагов, равным `totalRecords / BATCH_SIZE`.
+2. На каждом выполнении батча прогресс обновляется на 1 шаг.
+3. Последний шаг обновляется, если общее количество строк не делится нацело на размер батча.
+4. Логирование происходит в формате, отражающем состояние прогресса в процентах.
+
+### Пример работы
+Если у вас файл с 20 млн строк и размер батча равен 10 000:
+- Общее количество шагов: \( \frac{20\ 000\ 000}{10\ 000} = 2\ 000 \).
+- Прогресс бар будет обновляться каждые 10 000 строк.
