@@ -1,91 +1,121 @@
-Чтобы добавить отображение прогресса импорта файлов с использованием `ProgressBar`, можно использовать общий подход с передачей статуса выполнения и шагов через асинхронный механизм. Например, вы можете внедрить интерфейс `ProgressReporter` или аналогичное решение. Вот пример реализации:
 
-1. **Создаем интерфейс для прогресса:**
-```java
-public interface ProgressReporter {
-    void onProgress(String fileName, int currentStep, int totalSteps);
-}
-```
+Для добавления ProgressBar в данный код можно использовать отдельный сервис, который будет отслеживать состояние обработки файлов. ProgressBar будет обновляться по мере обработки батчей данных при импорте файла. Вот пример, как можно интегрировать ProgressBar:
 
-2. **Реализуем ProgressBar и подключаем его к импорту:**
-Создайте отдельный класс `ConsoleProgressReporter`, который будет выводить прогресс в консоль.
-
-```java
-public class ConsoleProgressReporter implements ProgressReporter {
-    @Override
-    public void onProgress(String fileName, int currentStep, int totalSteps) {
-        int progressPercentage = (int) (((double) currentStep / totalSteps) * 100);
-        System.out.printf("Импорт файла %s: %d%% (%d из %d шагов)%n", fileName, progressPercentage, currentStep, totalSteps);
-    }
-}
-```
-
-3. **Добавляем ProgressReporter в `FileImporterService`:**
-Обновите класс `FileImporterService`, чтобы принимать и использовать `ProgressReporter`.
+1. **Создайте класс `ProgressBarService`**, который будет отслеживать состояние обработки:
 
 ```java
 @Service
 @Slf4j
-public class FileImporterService {
-    private final Set<String> processedFiles = ConcurrentHashMap.newKeySet();
-    private final ProgressReporter progressReporter;
+public class ProgressBarService {
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
-    public FileImporterService(ProgressReporter progressReporter) {
-        this.progressReporter = progressReporter;
+    public void startProgress(String fileName, int totalSteps) {
+        progressBars.put(fileName, new ProgressBar(totalSteps));
+        log.info("Начало прогресса для файла {} с {} шагами", fileName, totalSteps);
     }
 
-    private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.update(stepsCompleted);
+            log.info("Прогресс для файла {}: {}%", fileName, progressBar.getPercentage());
+        }
+    }
 
-            List<CSVRecord> records = csvParser.getRecords();
-            int totalSteps = records.size();
-            int currentStep = 0;
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.remove(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+            log.info("Прогресс для файла {} завершён.", fileName);
+        }
+    }
 
-            try (PreparedStatement preparedStatement = connection.prepareStatement(generateInsertSQL(tableName, csvParser.getHeaderNames()))) {
-                for (CSVRecord record : records) {
-                    // Заполняем параметры для вставки
-                    for (int i = 0; i < record.size(); i++) {
-                        preparedStatement.setString(i + 1, record.get(i));
-                    }
-                    preparedStatement.addBatch();
-                    currentStep++;
+    @Slf4j
+    private static class ProgressBar {
+        private final int totalSteps;
+        private int completedSteps;
 
-                    // Выполняем батч каждые N записей
-                    if (currentStep % BATCH_SIZE == 0) {
-                        preparedStatement.executeBatch();
-                        progressReporter.onProgress(csvFilePath.getFileName().toString(), currentStep, totalSteps);
-                    }
-                }
-                preparedStatement.executeBatch();
-            }
+        public ProgressBar(int totalSteps) {
+            this.totalSteps = totalSteps;
+            this.completedSteps = 0;
+        }
 
-            progressReporter.onProgress(csvFilePath.getFileName().toString(), totalSteps, totalSteps);
-            return true;
+        public synchronized void update(int steps) {
+            this.completedSteps = Math.min(this.completedSteps + steps, totalSteps);
+        }
+
+        public synchronized int getPercentage() {
+            return (int) ((double) completedSteps / totalSteps * 100);
+        }
+
+        public synchronized void complete() {
+            this.completedSteps = totalSteps;
         }
     }
 }
 ```
 
-4. **Подключение в Spring-контексте:**
-Зарегистрируйте `ProgressReporter` в конфигурации вашего приложения.
+2. **Интеграция с `FileImporterService`:** Внедрите `ProgressBarService` в `FileImporterService` и обновляйте прогресс на разных этапах обработки файла.
+
+Пример изменения метода `importCsvToDatabaseBatch`:
 
 ```java
-@Configuration
-public class AppConfig {
-    @Bean
-    public ProgressReporter progressReporter() {
-        return new ConsoleProgressReporter();
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    int totalRecords = countLines(csvFilePath) - 1; // Вычисляем количество записей, вычитая строку заголовка
+    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords);
+
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))
+                .map(header -> "\"" + header.trim() + "\"")
+                .collect(Collectors.toList());
+        headers.add("\"iteration_id\"");
+        String insertSQL = generateInsertSQL(tableName, headers);
+        int iteration_id = getIterationId(csvFilePath);
+
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
+            for (CSVRecord record : records) {
+                for (int i = 0; i < headers.size(); i++) {
+                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
+                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                        description = "Пропуск данных";
+                        return false;
+                    } else {
+                        if (i == headers.size() - 1) {
+                            preparedStatement.setInt(i + 1, iteration_id);
+                        } else {
+                            preparedStatement.setString(i + 1, value);
+                        }
+                    }
+                }
+                preparedStatement.addBatch();
+                count++;
+
+                if (count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), BATCH_SIZE);
+                }
+            }
+            preparedStatement.executeBatch();
+            progressBarService.updateProgress(csvFilePath.getFileName().toString(), count % BATCH_SIZE);
+        }
+    } catch (Exception e) {
+        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
+        log.error(ExceptionFilter.unwindMessages(message, e));
+        description = ExceptionFilter.unwindMessages(message, e);
+        throw new Exception(message + e.getMessage(), e);
+    } finally {
+        progressBarService.completeProgress(csvFilePath.getFileName().toString());
     }
+    return true;
 }
 ```
 
-5. **Вывод в процессе работы:**
-Теперь во время импорта данных прогресс будет отображаться в консоли. Например:
-```
-Импорт файла example.csv: 20% (100 из 500 шагов)
-Импорт файла example.csv: 40% (200 из 500 шагов)
-Импорт файла example.csv: 100% (500 из 500 шагов)
-```
+3. **Изменения в других методах:** Аналогично обновляйте прогресс при обработке ZIP-файлов или других типов данных. Например, для ZIP-файла создайте общий прогресс и обновляйте его при обработке каждого файла внутри архива.
 
-Вы также можете интегрировать прогресс в веб-интерфейс, если используете `WebSocket` или другой механизм передачи данных в реальном времени.
+4. **Логирование прогресса:** Теперь `ProgressBarService` будет выводить процент выполнения задачи в логах. Это полезно для мониторинга.
+
+Этот подход позволяет гибко управлять состоянием прогресса для каждого файла и отображать шаги, такие как обработка батчей данных.
