@@ -1,169 +1,91 @@
-Хорошо! Давайте добавим примеры с использованием **различных библиотек**, включая как популярные, так и редкие решения. Мы создадим отдельные реализации для каждого из них, чтобы вы могли сравнить и выбрать наиболее подходящую.  
+Чтобы добавить отображение прогресса импорта файлов с использованием `ProgressBar`, можно использовать общий подход с передачей статуса выполнения и шагов через асинхронный механизм. Например, вы можете внедрить интерфейс `ProgressReporter` или аналогичное решение. Вот пример реализации:
 
----
-
-### **Полный список библиотек для работы с Progress Bar**
-1. **[ConsoleProgressBar (me.tongfei)](https://github.com/ctongfei/progressbar)**  
-2. **[JLine3](https://github.com/jline/jline3)**  
-3. **[Lanterna](https://github.com/mabe02/lanterna)**  
-4. **[ProgressBar4j](https://github.com/basshelal/ProgressBar4j)**  
-5. **[ProgressBarz](https://github.com/seratch/progress-barz)**  
-6. **Собственная реализация**  
-
----
-
-### **Gradle зависимости для всех библиотек**
-
-```groovy
-dependencies {
-    implementation 'me.tongfei:progressbar:0.9.5'         // ConsoleProgressBar
-    implementation 'org.jline:jline:3.21.0'               // JLine3
-    implementation 'com.googlecode.lanterna:lanterna:3.1.1' // Lanterna
-    implementation 'com.github.basshelal:progressbar4j:1.1' // ProgressBar4j
-    implementation 'com.github.seratch:progress-barz:0.3.0' // ProgressBarz
+1. **Создаем интерфейс для прогресса:**
+```java
+public interface ProgressReporter {
+    void onProgress(String fileName, int currentStep, int totalSteps);
 }
 ```
 
----
-
-### **Примеры использования**
-
-#### **1. ConsoleProgressBar (me.tongfei)**
-Эта библиотека предоставляет базовый прогресс-бар для консоли.
+2. **Реализуем ProgressBar и подключаем его к импорту:**
+Создайте отдельный класс `ConsoleProgressReporter`, который будет выводить прогресс в консоль.
 
 ```java
-import me.tongfei.progressbar.ProgressBar;
+public class ConsoleProgressReporter implements ProgressReporter {
+    @Override
+    public void onProgress(String fileName, int currentStep, int totalSteps) {
+        int progressPercentage = (int) (((double) currentStep / totalSteps) * 100);
+        System.out.printf("Импорт файла %s: %d%% (%d из %d шагов)%n", fileName, progressPercentage, currentStep, totalSteps);
+    }
+}
+```
 
-public class ConsoleProgressBarDemo {
-    public static void main(String[] args) throws InterruptedException {
-        try (ProgressBar pb = new ProgressBar("Task", 100)) {
-            for (int i = 0; i <= 100; i++) {
-                pb.step(); // Увеличиваем прогресс на 1 шаг
-                Thread.sleep(50); // Имитация работы
+3. **Добавляем ProgressReporter в `FileImporterService`:**
+Обновите класс `FileImporterService`, чтобы принимать и использовать `ProgressReporter`.
+
+```java
+@Service
+@Slf4j
+public class FileImporterService {
+    private final Set<String> processedFiles = ConcurrentHashMap.newKeySet();
+    private final ProgressReporter progressReporter;
+
+    public FileImporterService(ProgressReporter progressReporter) {
+        this.progressReporter = progressReporter;
+    }
+
+    private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+            List<CSVRecord> records = csvParser.getRecords();
+            int totalSteps = records.size();
+            int currentStep = 0;
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(generateInsertSQL(tableName, csvParser.getHeaderNames()))) {
+                for (CSVRecord record : records) {
+                    // Заполняем параметры для вставки
+                    for (int i = 0; i < record.size(); i++) {
+                        preparedStatement.setString(i + 1, record.get(i));
+                    }
+                    preparedStatement.addBatch();
+                    currentStep++;
+
+                    // Выполняем батч каждые N записей
+                    if (currentStep % BATCH_SIZE == 0) {
+                        preparedStatement.executeBatch();
+                        progressReporter.onProgress(csvFilePath.getFileName().toString(), currentStep, totalSteps);
+                    }
+                }
+                preparedStatement.executeBatch();
             }
+
+            progressReporter.onProgress(csvFilePath.getFileName().toString(), totalSteps, totalSteps);
+            return true;
         }
     }
 }
 ```
 
----
-
-#### **2. JLine3**
-Библиотека для работы с консольным вводом/выводом.
+4. **Подключение в Spring-контексте:**
+Зарегистрируйте `ProgressReporter` в конфигурации вашего приложения.
 
 ```java
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
-
-public class JLineProgressBarDemo {
-    public static void main(String[] args) throws Exception {
-        Terminal terminal = TerminalBuilder.terminal();
-        int total = 100;
-        for (int i = 0; i <= total; i++) {
-            int progress = (int) ((i / (double) total) * 100);
-            terminal.writer().print("\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "%");
-            terminal.flush();
-            Thread.sleep(50); // Имитация работы
-        }
-        terminal.writer().println("\nDone!");
+@Configuration
+public class AppConfig {
+    @Bean
+    public ProgressReporter progressReporter() {
+        return new ConsoleProgressReporter();
     }
 }
 ```
 
----
-
-#### **3. Lanterna**
-Lanterna позволяет создавать более сложные текстовые интерфейсы, включая прогресс-бары.
-
-```java
-import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
-import com.googlecode.lanterna.terminal.Terminal;
-import com.googlecode.lanterna.terminal.TerminalResizeListener;
-
-public class LanternaProgressBarDemo {
-    public static void main(String[] args) throws Exception {
-        Terminal terminal = new DefaultTerminalFactory().createTerminal();
-        int total = 100;
-        for (int i = 0; i <= total; i++) {
-            String bar = "\rProgress: [" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "] " + i + "%";
-            terminal.putString(bar);
-            terminal.flush();
-            Thread.sleep(50); // Имитация работы
-        }
-        terminal.close();
-    }
-}
+5. **Вывод в процессе работы:**
+Теперь во время импорта данных прогресс будет отображаться в консоли. Например:
+```
+Импорт файла example.csv: 20% (100 из 500 шагов)
+Импорт файла example.csv: 40% (200 из 500 шагов)
+Импорт файла example.csv: 100% (500 из 500 шагов)
 ```
 
----
-
-#### **4. ProgressBar4j**
-Простая, но мощная библиотека для текстового прогресса.
-
-```java
-import com.basshelal.progressbar.ProgressBar;
-
-public class ProgressBar4jDemo {
-    public static void main(String[] args) throws InterruptedException {
-        ProgressBar progressBar = new ProgressBar(50); // Ширина прогресс-бара
-        for (int i = 0; i <= 100; i++) {
-            progressBar.update(i); // Обновляем прогресс
-            Thread.sleep(50); // Имитация работы
-        }
-        System.out.println("\nDone!");
-    }
-}
-```
-
----
-
-#### **5. ProgressBarz**
-Эта библиотека поддерживает кастомизацию (например, изменение символов и цветов).
-
-```java
-import progressbarz.ProgressBar;
-import progressbarz.ProgressBarStyle;
-
-public class ProgressBarzDemo {
-    public static void main(String[] args) throws InterruptedException {
-        ProgressBar pb = new ProgressBar(100, ProgressBarStyle.UNICODE_BLOCK);
-        for (int i = 0; i <= 100; i++) {
-            pb.stepTo(i);
-            Thread.sleep(50); // Имитация работы
-        }
-        pb.close();
-    }
-}
-```
-
----
-
-#### **6. Собственная реализация**
-Стандартный подход с использованием `System.out`.
-
-```java
-public class CustomProgressBarDemo {
-    public static void main(String[] args) throws InterruptedException {
-        int total = 100;
-        for (int i = 0; i <= total; i++) {
-            int progress = (int) ((i / (double) total) * 100);
-            String bar = "\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "%";
-            System.out.print(bar);
-            Thread.sleep(50); // Имитация работы
-        }
-        System.out.println("\nDone!");
-    }
-}
-```
-
----
-
-### **Особенности и кастомизация**
-Вы можете настроить каждую библиотеку:  
-- **ConsoleProgressBar:** Изменение цвета, добавление таймера.  
-- **JLine:** Добавление анимации.  
-- **Lanterna:** Интеграция с текстовыми интерфейсами.  
-- **ProgressBar4j:** Изменение символов отображения.  
-- **ProgressBarz:** Полная кастомизация (цвета, стили, формы).  
-
-Если потребуется добавить больше примеров или настроить конкретный прогресс-бар, сообщите!
+Вы также можете интегрировать прогресс в веб-интерфейс, если используете `WebSocket` или другой механизм передачи данных в реальном времени.
