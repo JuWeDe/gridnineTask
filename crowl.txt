@@ -1,84 +1,169 @@
+Хорошо! Давайте добавим примеры с использованием **различных библиотек**, включая как популярные, так и редкие решения. Мы создадим отдельные реализации для каждого из них, чтобы вы могли сравнить и выбрать наиболее подходящую.  
+
+---
+
+### **Полный список библиотек для работы с Progress Bar**
+1. **[ConsoleProgressBar (me.tongfei)](https://github.com/ctongfei/progressbar)**  
+2. **[JLine3](https://github.com/jline/jline3)**  
+3. **[Lanterna](https://github.com/mabe02/lanterna)**  
+4. **[ProgressBar4j](https://github.com/basshelal/ProgressBar4j)**  
+5. **[ProgressBarz](https://github.com/seratch/progress-barz)**  
+6. **Собственная реализация**  
+
+---
+
+### **Gradle зависимости для всех библиотек**
+
+```groovy
 dependencies {
-    // JavaFX зависимости
-    implementation 'org.openjfx:javafx-controls:17.0.2' // Зависимость для JavaFX
-
-    // JFoenix для улучшенных UI-компонентов (например, прогресс-бар)
-    implementation 'com.jfoenix:jfoenix:9.0.10'
-
-    // Progress4j для текстовых прогресс-баров в консольных приложениях
-    implementation 'org.progressbar:progress4j:1.0.4'
-
-    // Если используете JavaFX с Gradle, вам также нужно будет указать настройку для JavaFX:
-    runtimeOnly 'org.openjfx:javafx-graphics:17.0.2'
+    implementation 'me.tongfei:progressbar:0.9.5'         // ConsoleProgressBar
+    implementation 'org.jline:jline:3.21.0'               // JLine3
+    implementation 'com.googlecode.lanterna:lanterna:3.1.1' // Lanterna
+    implementation 'com.github.basshelal:progressbar4j:1.1' // ProgressBar4j
+    implementation 'com.github.seratch:progress-barz:0.3.0' // ProgressBarz
 }
+```
 
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
-import javafx.application.Application;
-import javafx.scene.Scene;
-import javafx.scene.control.ProgressBar;
-import javafx.scene.layout.StackPane;
-import javafx.scene.paint.Color;
-import javafx.scene.text.Text;
-import javafx.stage.Stage;
-import javafx.util.Duration;
+---
 
-public class ProgressBarDemo extends Application {
+### **Примеры использования**
 
-    private ProgressBar progressBar;
-    private Text progressText;
+#### **1. ConsoleProgressBar (me.tongfei)**
+Эта библиотека предоставляет базовый прогресс-бар для консоли.
 
-    @Override
-    public void start(Stage primaryStage) {
-        // 1. JavaFX ProgressBar
-        System.out.println("Используем: JavaFX ProgressBar");
+```java
+import me.tongfei.progressbar.ProgressBar;
 
-        // 2. JFoenix (можно заменить на реальную зависимость JFoenix, если необходимо)
-        System.out.println("Используем: JFoenix ProgressBar");
-
-        // 3. Прогресс-бар на основе стандартного Java Swing
-        System.out.println("Используем: Java Swing JProgressBar");
-
-        // 4. Прогресс-бар с анимацией (для консольных приложений, например Progress4j)
-        System.out.println("Используем: Progress4j (для консоли)");
-
-        // 5. Прогресс-бар с титульной рамкой (кастомная реализация)
-        System.out.println("Используем: Кастомный прогресс-бар с титульной рамкой");
-
-        // 6. Создание кастомного прогресс-бара с анимацией в JavaFX
-        progressBar = new ProgressBar(0);
-        progressBar.setStyle("-fx-accent: #5cb85c; -fx-background-color: #e0e0e0; -fx-background-radius: 10;");
-        
-        // Текст для отображения прогресса
-        progressText = new Text("0%");
-        progressText.setFill(Color.DARKGREEN);
-        progressText.setStyle("-fx-font-size: 16px;");
-
-        // Анимация прогресс-бара
-        Timeline timeline = new Timeline(
-                new KeyFrame(Duration.seconds(0), e -> updateProgress(0)),
-                new KeyFrame(Duration.seconds(10), e -> updateProgress(1))
-        );
-        timeline.setCycleCount(Timeline.INDEFINITE);
-        timeline.play();
-
-        StackPane root = new StackPane();
-        root.getChildren().addAll(progressBar, progressText);
-
-        Scene scene = new Scene(root, 300, 150);
-        primaryStage.setTitle("Custom ProgressBar");
-        primaryStage.setScene(scene);
-        primaryStage.show();
-    }
-
-    private void updateProgress(double progress) {
-        progressBar.setProgress(progress);
-        progressText.setText((int)(progress * 100) + "%");
-    }
-
-    public static void main(String[] args) {
-        launch(args);
+public class ConsoleProgressBarDemo {
+    public static void main(String[] args) throws InterruptedException {
+        try (ProgressBar pb = new ProgressBar("Task", 100)) {
+            for (int i = 0; i <= 100; i++) {
+                pb.step(); // Увеличиваем прогресс на 1 шаг
+                Thread.sleep(50); // Имитация работы
+            }
+        }
     }
 }
+```
 
+---
 
+#### **2. JLine3**
+Библиотека для работы с консольным вводом/выводом.
+
+```java
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
+
+public class JLineProgressBarDemo {
+    public static void main(String[] args) throws Exception {
+        Terminal terminal = TerminalBuilder.terminal();
+        int total = 100;
+        for (int i = 0; i <= total; i++) {
+            int progress = (int) ((i / (double) total) * 100);
+            terminal.writer().print("\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "%");
+            terminal.flush();
+            Thread.sleep(50); // Имитация работы
+        }
+        terminal.writer().println("\nDone!");
+    }
+}
+```
+
+---
+
+#### **3. Lanterna**
+Lanterna позволяет создавать более сложные текстовые интерфейсы, включая прогресс-бары.
+
+```java
+import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
+import com.googlecode.lanterna.terminal.Terminal;
+import com.googlecode.lanterna.terminal.TerminalResizeListener;
+
+public class LanternaProgressBarDemo {
+    public static void main(String[] args) throws Exception {
+        Terminal terminal = new DefaultTerminalFactory().createTerminal();
+        int total = 100;
+        for (int i = 0; i <= total; i++) {
+            String bar = "\rProgress: [" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "] " + i + "%";
+            terminal.putString(bar);
+            terminal.flush();
+            Thread.sleep(50); // Имитация работы
+        }
+        terminal.close();
+    }
+}
+```
+
+---
+
+#### **4. ProgressBar4j**
+Простая, но мощная библиотека для текстового прогресса.
+
+```java
+import com.basshelal.progressbar.ProgressBar;
+
+public class ProgressBar4jDemo {
+    public static void main(String[] args) throws InterruptedException {
+        ProgressBar progressBar = new ProgressBar(50); // Ширина прогресс-бара
+        for (int i = 0; i <= 100; i++) {
+            progressBar.update(i); // Обновляем прогресс
+            Thread.sleep(50); // Имитация работы
+        }
+        System.out.println("\nDone!");
+    }
+}
+```
+
+---
+
+#### **5. ProgressBarz**
+Эта библиотека поддерживает кастомизацию (например, изменение символов и цветов).
+
+```java
+import progressbarz.ProgressBar;
+import progressbarz.ProgressBarStyle;
+
+public class ProgressBarzDemo {
+    public static void main(String[] args) throws InterruptedException {
+        ProgressBar pb = new ProgressBar(100, ProgressBarStyle.UNICODE_BLOCK);
+        for (int i = 0; i <= 100; i++) {
+            pb.stepTo(i);
+            Thread.sleep(50); // Имитация работы
+        }
+        pb.close();
+    }
+}
+```
+
+---
+
+#### **6. Собственная реализация**
+Стандартный подход с использованием `System.out`.
+
+```java
+public class CustomProgressBarDemo {
+    public static void main(String[] args) throws InterruptedException {
+        int total = 100;
+        for (int i = 0; i <= total; i++) {
+            int progress = (int) ((i / (double) total) * 100);
+            String bar = "\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "%";
+            System.out.print(bar);
+            Thread.sleep(50); // Имитация работы
+        }
+        System.out.println("\nDone!");
+    }
+}
+```
+
+---
+
+### **Особенности и кастомизация**
+Вы можете настроить каждую библиотеку:  
+- **ConsoleProgressBar:** Изменение цвета, добавление таймера.  
+- **JLine:** Добавление анимации.  
+- **Lanterna:** Интеграция с текстовыми интерфейсами.  
+- **ProgressBar4j:** Изменение символов отображения.  
+- **ProgressBarz:** Полная кастомизация (цвета, стили, формы).  
+
+Если потребуется добавить больше примеров или настроить конкретный прогресс-бар, сообщите!
