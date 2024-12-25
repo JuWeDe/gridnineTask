@@ -1,3 +1,10 @@
+Ваш код для `ProgressBarService` уже выглядит довольно хорошим. Чтобы он отображал прогресс в виде динамически обновляемой строки в консоли (а не просто писал лог-сообщения с процентами), вам нужно вместо `log.info` использовать вывод в консоль с возвратом строки (`\r`). 
+
+Вот переработанный вариант вашего сервиса:
+
+### Изменённый `ProgressBarService`
+
+```java
 package ru.sberinsur.fileImporter.services;
 
 import org.springframework.stereotype.Service;
@@ -76,3 +83,59 @@ public class ProgressBarService {
         }
     }
 }
+```
+
+---
+
+### Изменения:
+1. **Динамическое обновление консоли**:
+   - Используется `System.out.print("\r...")` для перерисовки строки прогресс-бара.
+   - Символ `\r` возвращает курсор в начало строки, позволяя переписать её.
+
+2. **Вывод прогресс-бара**:
+   - Добавлен визуальный прогресс-бар длиной 50 символов.
+   - Обновление прогресса происходит в реальном времени при вызове `updateProgress`.
+
+3. **Завершение прогресса**:
+   - После вызова `completeProgress`, добавляется перенос строки (`System.out.println()`), чтобы окончательный результат корректно завершил обновление строки.
+
+---
+
+### Пример использования:
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    ProgressBarService progressBarService = new ProgressBarService();
+    String fileName = "example.csv";
+    long totalRecords = 25000000L; // Общее количество строк
+    int batchSize = 1000000; // Размер батча
+
+    progressBarService.startProgress(fileName, totalRecords, batchSize);
+
+    int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
+    for (int i = 0; i < totalSteps; i++) {
+        Thread.sleep(500); // Эмуляция обработки батча
+        progressBarService.updateProgress(fileName, 1); // Увеличение прогресса на 1 шаг
+    }
+
+    progressBarService.completeProgress(fileName);
+}
+```
+
+---
+
+### Пример вывода в консоли:
+
+```
+Начало импорта файла: example.csv с 25 шагами (размер батча: 1000000)
+Импорт файла example.csv [===================                       ] 52%
+Импорт файла example.csv [=========================================] 100%
+Импорт файла example.csv завершён.
+```
+
+---
+
+### Особенности:
+- Прогресс обновляется в режиме реального времени.
+- Вывод остаётся чистым, без создания множества строк.
+- Вы можете легко интегрировать этот сервис в текущую логику импорта с батчами.
