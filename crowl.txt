@@ -4,6 +4,10 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
     int stepsCompleted = 0;
 
+    // Выводим прогресс бар с сообщением
+    String message = "Импорт данных в базу для файла " + csvFilePath.getFileName();
+    printMsgWithProgressBar(message, totalSteps, 50); // 50 — длина прогресс бара, можно настроить
+
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
 
@@ -44,14 +48,14 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
                     stepsCompleted++;
-                    printProgress(stepsCompleted, totalSteps); // Обновляем прогресс
+                    printMsgWithProgressBar(message, stepsCompleted, totalSteps); // Обновляем прогресс бар
                 }
             }
 
             preparedStatement.executeBatch(); // Выполнение оставшихся записей
             if (count % BATCH_SIZE != 0) {
                 stepsCompleted++;
-                printProgress(stepsCompleted, totalSteps); // Обновляем для последнего батча
+                printMsgWithProgressBar(message, stepsCompleted, totalSteps); // Обновление для последнего батча
             }
         }
     } catch (Exception e) {
@@ -65,19 +69,27 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
     return true;
 }
 
-private void printProgress(int stepsCompleted, int totalSteps) {
-    int percentage = (int) ((double) stepsCompleted / totalSteps * 100);
-    int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+public static void printMsgWithProgressBar(String message, int stepsCompleted, int totalSteps) throws Exception {
+    int length = 50; // Длина прогресс бара
+    char incomplete = '░';
+    char complete = '█';
 
-    StringBuilder progressBar = new StringBuilder("[");
-    for (int i = 0; i < 50; i++) {
-        if (i < progressBars) {
-            progressBar.append("=");
-        } else {
-            progressBar.append(" ");
+    // Выводим сообщение
+    System.out.println(message);
+
+    // Рисуем прогресс-бар
+    for (int i = 0; i <= length; i++) {
+        for (int j = 0; j < length; j++) {
+            if (j < (i * totalSteps / length)) {
+                System.out.print(complete); // Заполненная часть
+            } else {
+                System.out.print(incomplete); // Не заполненная часть
+            }
         }
+        System.out.print("\r"); // Перезаписываем в той же строке
+        Thread.sleep(50); // Задержка для плавности обновления (можно настроить)
     }
-    progressBar.append("] ").append(percentage).append("%");
 
-    System.out.print("\r" + progressBar.toString()); // Перезаписываем прогресс в той же строке
+    // Завершаем вывод прогресса
+    System.out.println();
 }
