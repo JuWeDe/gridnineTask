@@ -1,113 +1,155 @@
-Чтобы отображать динамический прогресс-бар, который будет обновляться на одной строке в консоли, нужно использовать перезапись той же строки в консоли. Используя `\r` (возврат каретки), можно перезаписать текущую строку, чтобы не добавлять новые строки в вывод.
 
-Вместо того чтобы логировать прогресс с помощью `log.info()`, нужно обновлять строку с прогрессом в консоли. Вот как можно это сделать, чтобы прогресс-бар обновлялся на одной строке.
+Да, оба предложенных метода позволят выводить один прогресс-бар для файла, и каждый из них будет обновляться по мере выполнения обработки данных.
 
-### Обновленный `ProgressBarService`:
+### 1. **Реализация с собственным прогресс-баром (ручное обновление)**:
+
+Этот метод будет работать так, что один прогресс-бар будет выводиться и обновляться в той же строке на экране, пока не завершится процесс импорта. Это достигается с помощью символа возврата каретки `\r`, который перезаписывает текущую строку, создавая эффект "динамического" прогресс-бара.
+
+Когда вы вызываете метод `printProgress(stepsCompleted, totalSteps)`, он будет обновлять текущую строку, показывая заполнение прогресс-бара в реальном времени, а не после завершения импорта. Прогресс обновляется с каждым шагом (или батчем), пока не будет достигнут 100%.
+
+Вот как это выглядит:
 
 ```java
-package ru.sberinsur.fileImporter.services;
+private void printProgress(int stepsCompleted, int totalSteps) {
+    int percentage = (int) ((double) stepsCompleted / totalSteps * 100);
+    int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
 
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Service
-public class ProgressBarService {
-
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов равно количеству батчей
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
-        System.out.println("Начало прогресса для файла: " + fileName);
-    }
-
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
+    StringBuilder progressBar = new StringBuilder("[");
+    for (int i = 0; i < 50; i++) {
+        if (i < progressBars) {
+            progressBar.append("=");
+        } else {
+            progressBar.append(" ");
         }
     }
+    progressBar.append("] ").append(percentage).append("%");
 
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName);
-        System.out.println("Прогресс завершён для файла: " + fileName);
-    }
-
-    private static class ProgressBar {
-        private final int totalSteps;
-        private int completedSteps;
-        private final String fileName;
-
-        public ProgressBar(int totalSteps, String fileName) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-            System.out.println(); // Закрываем строку после завершения.
-        }
-
-        private void printProgress() {
-            int percentage = (int) ((double) completedSteps / totalSteps * 100);
-            int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
-
-            StringBuilder progressBar = new StringBuilder("[");
-            for (int i = 0; i < 50; i++) {
-                if (i < progressBars) {
-                    progressBar.append("=");
-                } else {
-                    progressBar.append(" ");
-                }
-            }
-            progressBar.append("] ").append(percentage).append("%");
-
-            // Перезаписываем строку в консоли
-            System.out.print("\rПрогресс для файла " + fileName + ": " + progressBar);
-            System.out.flush();  // Принудительно сбрасываем вывод
-        }
-    }
+    System.out.print("\r" + progressBar.toString()); // Перезаписываем прогресс в той же строке
 }
 ```
 
-### Пояснение:
-1. **Перезапись строки с прогрессом**:
-   - `System.out.print("\r...")` — это ключевой момент. Он позволяет перезаписывать строку в консоли, не добавляя новые строки.
-   - После каждого обновления прогресса будет обновляться только текущая строка, и консоль будет заполняться прогресс-баром.
+Каждый раз, когда вы вызываете этот метод, прогресс будет обновляться в той же строке, выводя прогресс-бар с текущим процентом. После завершения операции выводится новая строка.
+
+### 2. **Использование библиотеки `ProgressBar` от Tongfei**:
+
+Если вы используете библиотеку `ProgressBar`, то этот подход также поддерживает один прогресс-бар, который будет обновляться по мере выполнения операции. В этом случае библиотека сама управляет обновлением прогресс-бара в той же строке.
+
+```java
+import com.github.tongfei.progressbar.ProgressBar;
+import com.github.tongfei.progressbar.ProgressBarStyle;
+
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    long totalRecords = fileIteration.getRows(); // Вычисляем количество записей
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
+
+    // Инициализируем прогресс-бар
+    try (ProgressBar pb = new ProgressBar("Импорт данных", totalSteps, System.out)) {
+        pb.setStyle(ProgressBarStyle.ASCII); // Стиль прогресс-бара
+
+        try (Reader reader = Files.newBufferedReader(csvFilePath);
+             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+            List<String> headers = csvParser.getHeaderNames().stream()
+                    .flatMap(header -> splitHeader(header.trim()))
+                    .map(header -> "\"" + header.trim() + "\"")
+                    .collect(Collectors.toList());
+            headers.add("\"iteration_id\"");
+            String insertSQL = generateInsertSQL(tableName, headers);
+            int iteration_id = getIterationId(csvFilePath);
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+                List<CSVRecord> records = csvParser.getRecords();
+                int count = 0;
+
+                for (CSVRecord record : records) {
+                    for (int i = 0; i < headers.size(); i++) {
+                        String value;
+                        if (i == headers.size() - 1) {
+                            value = String.valueOf(iteration_id);
+                        } else {
+                            value = record.get(i);
+                        }
+                        if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                            description = "Пропуск данных";
+                            return false;
+                        } else {
+                            if (i == headers.size() - 1) {
+                                preparedStatement.setInt(i + 1, iteration_id);
+                            } else {
+                                preparedStatement.setString(i + 1, value);
+                            }
+                        }
+                    }
+
+                    preparedStatement.addBatch();
+                    count++;
+                    if (count % BATCH_SIZE == 0) {
+                        preparedStatement.executeBatch();
+                        pb.step(); // Обновляем прогресс
+                    }
+                }
+
+                preparedStatement.executeBatch(); // Выполняем оставшиеся записи
+                if (count % BATCH_SIZE != 0) {
+                    pb.step(); // Обновляем прогресс для последнего батча
+                }
+            }
+        } catch (Exception e) {
+            String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
+            log.error(ExceptionFilter.unwindMessages(message, e));
+            description = ExceptionFilter.unwindMessages(message, e);
+            throw new Exception(message + e.getMessage(), e);
+        }
+    }
+
+    System.out.println(); // Переносим на новую строку после завершения
+    return true;
+}
+```
+
+Здесь библиотека автоматически обновляет прогресс-бар на одной строке, выводя текущий прогресс в реальном времени.
+
+### Как это работает:
+- Для обоих решений прогресс-бар обновляется в той же строке, а не выводится на новой.
+- В случае с **библиотекой `ProgressBar`** это делается автоматически, когда вы вызываете `pb.step()`.
+- В случае с **собственным решением** вы вручную обновляете строку с прогрессом с помощью `\r`.
+
+### Резюме:
+Оба подхода позволяют динамически обновлять один прогресс-бар на экране, показывая прогресс в реальном времени для обработки файла. Вы можете выбрать любой из них в зависимости от предпочтений (ручной прогресс-бар или с использованием внешней библиотеки).
+
+
+
+
+
+
+
+
+
+
+
+Нет, метод `printProgress` не обязательно должен находиться в том же классе, что и `importCsvToDatabaseBatch`, но это может быть удобным решением для организации кода. В зависимости от того, как вы хотите структурировать ваш код, можно расположить метод `printProgress` в одном из двух мест:
+
+1. **В том же классе, что и `importCsvToDatabaseBatch`:**
    
-2. **Принудительный сброс вывода**:
-   - `System.out.flush()` используется для того, чтобы сразу обновить вывод в консоли, без задержки.
+   Это будет более прямолинейным вариантом, если вы хотите, чтобы логика обновления прогресс-бара была непосредственно привязана к процессу импорта. В этом случае вы можете просто вызывать метод `printProgress` внутри того же класса, где происходит обработка данных.
 
-3. **Динамическое обновление прогресс-бара**:
-   - Прогресс-бар будет показывать 50 символов (представляющих 100% прогресса), где каждый символ `=` будет обозначать шаг.
-   - Обновление прогресс-бара происходит при каждом вызове `updateProgress`.
+2. **В отдельном сервисе или классе, например, в `ProgressBarService`:**
 
----
+   Это более чистое разделение обязанностей и подход, который будет лучше в плане организации кода, особенно если у вас в проекте будет несколько мест, где нужно показывать прогресс-бар. Например, можно создать класс `ProgressBarService`, который будет управлять выводом прогресса, а сам метод импорта будет только вызывать сервис для обновления прогресса.
 
-### Интеграция с вашим методом `importCsvToDatabaseBatch`:
+Вот пример для обоих подходов:
 
-В вашем методе, вы уже правильно обновляете прогресс через `progressBarService.updateProgress`, но важно удостовериться, что этот вызов будет происходить после каждого батча, что вы, похоже, уже сделали.
+### 1. **Метод `printProgress` в том же классе, что и `importCsvToDatabaseBatch`:**
 
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
-    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
+    long totalRecords = fileIteration.getRows(); // Вычисляем количество записей
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
 
+    // Инициализация прогресса
+    int stepsCompleted = 0;
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        
         List<String> headers = csvParser.getHeaderNames().stream()
                 .flatMap(header -> splitHeader(header.trim()))
                 .map(header -> "\"" + header.trim() + "\"")
@@ -119,11 +161,15 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
             List<CSVRecord> records = csvParser.getRecords();
             int count = 0;
-            int stepsCompleted = 0;
 
             for (CSVRecord record : records) {
                 for (int i = 0; i < headers.size(); i++) {
-                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
+                    String value;
+                    if (i == headers.size() - 1) {
+                        value = String.valueOf(iteration_id);
+                    } else {
+                        value = record.get(i);
+                    }
                     if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
                         description = "Пропуск данных";
                         return false;
@@ -135,19 +181,19 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
                         }
                     }
                 }
+
                 preparedStatement.addBatch();
                 count++;
-
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
                     stepsCompleted++;
-                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем на 1 шаг (1 батч)
+                    printProgress(stepsCompleted, totalSteps); // Обновление прогресса
                 }
             }
-            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
+            preparedStatement.executeBatch(); // Выполнение оставшихся записей
             if (count % BATCH_SIZE != 0) {
                 stepsCompleted++;
-                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем для последнего батча
+                printProgress(stepsCompleted, totalSteps); // Обновление прогресса для последнего батча
             }
         }
     } catch (Exception e) {
@@ -155,15 +201,99 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         log.error(ExceptionFilter.unwindMessages(message, e));
         description = ExceptionFilter.unwindMessages(message, e);
         throw new Exception(message + e.getMessage(), e);
-    } finally {
-        progressBarService.completeProgress(csvFilePath.getFileName().toString());
     }
+
+    System.out.println(); // Перенос на новую строку после завершения
+    return true;
+}
+
+private void printProgress(int stepsCompleted, int totalSteps) {
+    int percentage = (int) ((double) stepsCompleted / totalSteps * 100);
+    int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+
+    StringBuilder progressBar = new StringBuilder("[");
+    for (int i = 0; i < 50; i++) {
+        if (i < progressBars) {
+            progressBar.append("=");
+        } else {
+            progressBar.append(" ");
+        }
+    }
+    progressBar.append("] ").append(percentage).append("%");
+
+    System.out.print("\r" + progressBar.toString()); // Перезаписываем прогресс в той же строке
+}
+```
+
+### 2. **Метод `printProgress` в отдельном сервисе (`ProgressBarService`):**
+
+```java
+@Service
+public class ProgressBarService {
+
+    public void printProgress(int stepsCompleted, int totalSteps) {
+        int percentage = (int) ((double) stepsCompleted / totalSteps * 100);
+        int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+
+        StringBuilder progressBar = new StringBuilder("[");
+        for (int i = 0; i < 50; i++) {
+            if (i < progressBars) {
+                progressBar.append("=");
+            } else {
+                progressBar.append(" ");
+            }
+        }
+        progressBar.append("] ").append(percentage).append("%");
+
+        System.out.print("\r" + progressBar.toString()); // Перезаписываем прогресс в той же строке
+    }
+}
+```
+
+И в методе `importCsvToDatabaseBatch`:
+
+```java
+@Autowired
+private ProgressBarService progressBarService;
+
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    long totalRecords = fileIteration.getRows(); // Вычисляем количество записей
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
+
+    int stepsCompleted = 0;
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        // Логика обработки данных
+        // ...
+
+        for (CSVRecord record : records) {
+            // Логика обработки каждой записи
+            // ...
+
+            preparedStatement.addBatch();
+            count++;
+            if (count % BATCH_SIZE == 0) {
+                preparedStatement.executeBatch();
+                stepsCompleted++;
+                progressBarService.printProgress(stepsCompleted, totalSteps); // Обновление прогресса через сервис
+            }
+        }
+
+        preparedStatement.executeBatch(); // Выполнение оставшихся записей
+        if (count % BATCH_SIZE != 0) {
+            stepsCompleted++;
+            progressBarService.printProgress(stepsCompleted, totalSteps); // Обновление прогресса для последнего батча
+        }
+    }
+
+    System.out.println(); // Перенос на новую строку после завершения
     return true;
 }
 ```
 
-### Примечания:
-- **Проверьте вывод в командной строке**: убедитесь, что вы запускаете программу в терминале или консоли, а не в среде разработки, которая может обрабатывать вывод по-своему.
-- **Меньше зависимостей**: мы убрали использование `log.info` для прогресса, так как оно приводит к выводу в лог, а не в консоль.
+### Заключение:
+- В **первом варианте** метод `printProgress` находится внутри того же класса, что и метод импорта, и отвечает за обновление прогресса.
+- Во **втором варианте** метод `printProgress` выносится в отдельный сервис `ProgressBarService`, который можно использовать в разных частях программы.
 
-Теперь, при каждом обновлении прогресса, строка будет перезаписываться, и прогресс будет динамично отображаться на одной строке.
+Выбирайте тот подход, который более подходит для вашей архитектуры и структуры кода.
