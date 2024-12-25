@@ -1,43 +1,82 @@
-Для работы с прогресс-баром через библиотеку, вы можете использовать библиотеку **`ProgressBar`** (например, `me.tongfei:progressbar`). Это популярная библиотека для отображения прогресса в консоли.
+Ваши наблюдения могут быть связаны с несколькими проблемами:
+
+1. **Прогресс-бар обновляется только после завершения задачи**: Это происходит, если операции ввода/вывода блокируют основной поток, и обновление прогресс-бара откладывается.
+2. **Короткий прогресс-бар**: Это может быть связано с настройками ширины консоли или количеством шагов, которые вы передаете в `ProgressBar`.
+
+Давайте исправим эти проблемы:
 
 ---
 
-### Шаги интеграции библиотеки `ProgressBar`
+### Исправление 1: Обновление прогресс-бара в реальном времени
 
-1. Добавьте зависимость в ваш проект:
+Чтобы прогресс-бар отображался корректно во время выполнения, нужно убедиться, что выполнение задачи не блокирует обновление консоли. Для этого можно использовать отдельный поток для отображения прогресса. Библиотека `ProgressBar` уже поддерживает это через асинхронный режим.
 
-**Для Maven:**
-
-```xml
-<dependency>
-    <groupId>me.tongfei</groupId>
-    <artifactId>progressbar</artifactId>
-    <version>0.9.5</version>
-</dependency>
-```
-
-**Для Gradle:**
-
-```gradle
-implementation 'me.tongfei:progressbar:0.9.5'
-```
-
-2. Используйте `ProgressBar` в вашем коде.
-
----
-
-### Обновление `importCsvToDatabaseBatch`
-
-Добавим прогресс-бар, который обновляется в зависимости от батчей:
+Добавим асинхронный прогресс-бар:
 
 ```java
-import me.tongfei.progressbar.ProgressBar;
+try (ProgressBar progressBar = new ProgressBarBuilder()
+        .setTaskName("Импорт файла")
+        .setInitialMax(totalBatches) // Общее количество батчей
+        .setUpdateIntervalMillis(100) // Обновление каждые 100 мс
+        .setStyle(ProgressBarStyle.ASCII) // ASCII-стиль для простого вывода
+        .build()) {
+    
+    // Логика обработки
+    for (CSVRecord record : records) {
+        // Обработка строк
+        if (count % BATCH_SIZE == 0) {
+            preparedStatement.executeBatch();
+            progressBar.step(); // Обновляем прогресс
+        }
+    }
 
+    // Если остались данные вне батча
+    if (count % BATCH_SIZE != 0) {
+        preparedStatement.executeBatch();
+        progressBar.step();
+    }
+}
+```
+
+---
+
+### Исправление 2: Увеличение длины прогресс-бара
+
+По умолчанию длина прогресс-бара зависит от ширины консоли, но вы можете задать её вручную:
+
+```java
+try (ProgressBar progressBar = new ProgressBarBuilder()
+        .setTaskName("Импорт файла")
+        .setInitialMax(totalBatches) // Общее количество батчей
+        .setUpdateIntervalMillis(100) // Обновление каждые 100 мс
+        .setStyle(ProgressBarStyle.ASCII) // ASCII-стиль для простого вывода
+        .setMaxRenderedLength(50) // Установка длины прогресс-бара
+        .build()) {
+    
+    // Логика обработки
+}
+```
+
+Укажите `setMaxRenderedLength(50)` или любое другое значение, чтобы прогресс-бар стал длиннее.
+
+---
+
+### Полный исправленный код
+
+Вот обновленная функция `importCsvToDatabaseBatch` с прогресс-баром:
+
+```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
     long totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
     long totalBatches = (long) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество батчей
 
-    try (ProgressBar progressBar = new ProgressBar("Импорт файла", totalBatches); // Создаем прогресс-бар
+    try (ProgressBar progressBar = new ProgressBarBuilder()
+            .setTaskName("Импорт файла")
+            .setInitialMax(totalBatches) // Устанавливаем общее количество батчей
+            .setUpdateIntervalMillis(100) // Обновляем каждые 100 мс
+            .setStyle(ProgressBarStyle.ASCII) // Стиль ASCII
+            .setMaxRenderedLength(50) // Увеличиваем длину прогресс-бара
+            .build();
          Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
         
@@ -92,24 +131,10 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
 ---
 
-### Пример отображения прогресса в консоли
+### Результат
 
-При запуске кода с файлом на 20 млн строк и размером батча 10 000, прогресс-бар будет выглядеть так:
+1. Прогресс-бар будет отображаться в одной строке.
+2. Обновление будет происходить в реальном времени, без задержек.
+3. Длина прогресс-бара будет контролируемой (например, 50 символов).
 
-```
-Импорт файла  57% [=====================>-------------] 11432/20000 (10:32)
-```
-
-Где:
-- **57%** — текущий прогресс.
-- **[=====================>-------------]** — визуальное отображение прогресса.
-- **11432/20000** — текущий номер батча / общее количество батчей.
-- **(10:32)** — расчетное оставшееся время.
-
----
-
-### Примечания
-
-1. `ProgressBar` автоматически завершает строку при достижении 100%.
-2. Прогресс-бар не создает много строк в логах, так как обновляет текущее состояние на одной строке.
-3. Если вы хотите логировать прогресс в файл, можно дополнительно настроить вывод через `ProgressBarBuilder`.
+Если у вас всё еще будут вопросы или проблемы, дайте знать!
