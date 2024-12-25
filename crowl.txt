@@ -1,26 +1,8 @@
-Понял, проблема может быть связана с тем, что обновление прогресса происходит внутри одной транзакции или обработка всех батчей происходит синхронно, и вывод консоли блокируется до её завершения. Это связано с тем, что стандартные механизмы логирования или обновления строки в консоли просто не получают времени на выполнение, пока не закончится весь процесс.
-
-### Исправленный подход:
-
-1. **Реальное обновление прогресса**:
-   - Убедимся, что каждый вызов `updateProgress` обновляет состояние **немедленно**.
-
-2. **Работа с консольным выводом**:
-   - Используем `System.out.flush()` для немедленного обновления строки.
-
-3. **Сохранение транзакции батчами**:
-   - Если прогресс обновляется внутри большой транзакции, нужно делать `flush` после каждой обработки батча.
-
----
-
-### Новый прогресс-бар с немедленным обновлением:
-```java
 package ru.sberinsur.fileImporter.services;
 
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 
 @Service
@@ -30,8 +12,8 @@ public class ProgressBarService {
 
     public void startProgress(String fileName, long totalRecords, int batchSize) {
         int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
-        progressBars.put(fileName, new ProgressBar(fileName, totalSteps));
-        System.out.printf("Начало импорта файла '%s' (всего шагов: %d)%n", fileName, totalSteps);
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
+        System.out.println("Начало прогресса для файла: " + fileName);
     }
 
     public void updateProgress(String fileName, int stepsCompleted) {
@@ -42,43 +24,43 @@ public class ProgressBarService {
     }
 
     public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.remove(fileName);
+        ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
             progressBar.complete();
-            System.out.println(); // Завершение строки
-            System.out.printf("Импорт файла '%s' завершён.%n", fileName);
         }
+        progressBars.remove(fileName);
+        System.out.println("Прогресс завершён для файла: " + fileName);
     }
 
     private static class ProgressBar {
-        private final String fileName;
         private final int totalSteps;
-        private final AtomicInteger completedSteps = new AtomicInteger(0);
+        private int completedSteps;
+        private final String fileName;
 
-        public ProgressBar(String fileName, int totalSteps) {
-            this.fileName = fileName;
+        public ProgressBar(int totalSteps, String fileName) {
             this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.completedSteps = 0;
         }
 
         public synchronized void update(int steps) {
-            completedSteps.addAndGet(steps);
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
             printProgress();
         }
 
         public synchronized void complete() {
-            completedSteps.set(totalSteps);
+            completedSteps = totalSteps;
             printProgress();
+            System.out.println(); // Закрываем строку после завершения.
         }
 
         private void printProgress() {
-            int percentage = (int) (((double) completedSteps.get() / totalSteps) * 100);
-            int barWidth = 50; // Длина прогресс-бара
-            int filledWidth = (int) (((double) completedSteps.get() / totalSteps) * barWidth);
+            int percentage = (int) ((double) completedSteps / totalSteps * 100);
+            int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
 
-            StringBuilder progressBar = new StringBuilder("\r");
-            progressBar.append("Импорт файла '").append(fileName).append("' [");
-            for (int i = 0; i < barWidth; i++) {
-                if (i < filledWidth) {
+            StringBuilder progressBar = new StringBuilder("[");
+            for (int i = 0; i < 50; i++) {
+                if (i < progressBars) {
                     progressBar.append("=");
                 } else {
                     progressBar.append(" ");
@@ -86,159 +68,9 @@ public class ProgressBarService {
             }
             progressBar.append("] ").append(percentage).append("%");
 
-            System.out.print(progressBar.toString());
-            System.out.flush(); // Немедленное обновление консоли
+            // Перезаписываем строку в консоли
+            System.out.print("\rПрогресс для файла " + fileName + ": " + progressBar);
+            System.out.flush();
         }
     }
 }
-```
-
----
-
-### Использование:
-```java
-public static void main(String[] args) throws InterruptedException {
-    ProgressBarService progressBarService = new ProgressBarService();
-    String fileName = "example.csv";
-    long totalRecords = 1000000; // Общее количество записей
-    int batchSize = 50000; // Размер одного батча
-
-    progressBarService.startProgress(fileName, totalRecords, batchSize);
-
-    int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
-
-    for (int i = 1; i <= totalSteps; i++) {
-        // Эмулируем обработку одного батча
-        Thread.sleep(100); // Имитация времени обработки
-        progressBarService.updateProgress(fileName, 1); // Сообщаем, что один батч завершён
-    }
-
-    progressBarService.completeProgress(fileName);
-}
-```
-
----
-
-### Ожидаемый вывод:
-```
-Начало импорта файла 'example.csv' (всего шагов: 20)
-Импорт файла 'example.csv' [====================                ] 50%
-Импорт файла 'example.csv' [====================================] 100%
-Импорт файла 'example.csv' завершён.
-```
-
----
-
-### Что учтено:
-1. **`System.out.flush()`**: Немедленный вывод обновлений в консоль, чтобы прогресс отображался сразу.
-2. **Многопоточность**: Внутренние методы `update` и `complete` синхронизированы.
-3. **Обработка батчей**: Если ваши батчи записываются в одну транзакцию, убедитесь, что `updateProgress` вызывается внутри цикла обработки батчей, а не после завершения транзакции.
-
-Если прогресс всё ещё отображается после завершения импорта:
-- Проверьте, где вызывается `updateProgress`. Он должен быть вызван **внутри цикла**, а не после завершения всей операции.
-- Убедитесь, что вызов `System.out.print` не блокируется другими задачами.
-
-Дайте знать, если потребуется уточнение!
-
-
-
-Использование сервиса прогресс-бара в вашем методе выглядит корректным. Однако для уверенности, что прогресс обновляется динамично, важно обратить внимание на несколько деталей, касающихся вызова `System.out.print`, а также на возможные блокировки потока консоли.
-
-Вот несколько доработок и проверок, чтобы гарантировать корректное обновление прогресс-бара:
-
----
-
-### Обновлённый метод
-
-```java
-private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
-    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
-
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))
-                .map(header -> "\"" + header.trim() + "\"")
-                .collect(Collectors.toList());
-        headers.add("\"iteration_id\"");
-        String insertSQL = generateInsertSQL(tableName, headers);
-        int iteration_id = getIterationId(csvFilePath);
-
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
-
-            for (CSVRecord record : records) {
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
-                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
-                        description = "Пропуск данных";
-                        return false;
-                    } else {
-                        if (i == headers.size() - 1) {
-                            preparedStatement.setInt(i + 1, iteration_id);
-                        } else {
-                            preparedStatement.setString(i + 1, value);
-                        }
-                    }
-                }
-                preparedStatement.addBatch();
-                count++;
-
-                // Выполняем батч при достижении размера BATCH_SIZE
-                if (count % BATCH_SIZE == 0) {
-                    preparedStatement.executeBatch();
-                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Уведомляем об успешной обработке батча
-                }
-            }
-
-            // Выполняем оставшиеся записи
-            if (count % BATCH_SIZE != 0) {
-                preparedStatement.executeBatch();
-                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Уведомляем о последнем неполном батче
-            }
-        }
-    } catch (Exception e) {
-        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
-        log.error(ExceptionFilter.unwindMessages(message, e));
-        description = ExceptionFilter.unwindMessages(message, e);
-        throw new Exception(message + e.getMessage(), e);
-    } finally {
-        progressBarService.completeProgress(csvFilePath.getFileName().toString());
-    }
-    return true;
-}
-```
-
----
-
-### Что добавлено или изменено:
-1. **Динамическое обновление прогресса**:
-   - Вызовы `progressBarService.updateProgress` происходят сразу после успешной обработки батча. Это ключевой момент — обновление прогресса должно вызываться только после выполнения транзакции (`preparedStatement.executeBatch()`).
-
-2. **Финальный батч**:
-   - Обрабатывается оставшийся неполный батч с отдельным вызовом `progressBarService.updateProgress`.
-
-3. **Ошибки обработки**:
-   - Если прогресс не отображается правильно, вероятно, проблема в вызове `System.out.print` (внутри `ProgressBarService`). Убедитесь, что `System.out.flush()` вызывается сразу после печати.
-
----
-
-### Проверка в `ProgressBarService`
-Если прогресс не отображается динамично, проверьте, не блокируется ли вывод в консоль. Ваш `ProgressBarService` уже учитывает вызовы `System.out.flush()` для немедленного обновления. Убедитесь, что вызывается именно ваш сервис, а не происходит "затирание" лога другим процессом.
-
----
-
-### Проверка на задержки в консоли
-Иногда поток вывода блокируется, если:
-- Вывод идёт через какой-то внешний логгер.
-- Используется IDE, которая буферизует консоль (например, IntelliJ IDEA).
-
-Для теста можно использовать чистый запуск через `java -jar` из командной строки, чтобы убедиться, что проблема не в буферизации IDE.
-
----
-
-Если всё это не помогает, напишите, чтобы я мог предложить более глубокую отладку!
-
