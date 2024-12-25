@@ -1,141 +1,83 @@
-Ваш код для `ProgressBarService` уже выглядит довольно хорошим. Чтобы он отображал прогресс в виде динамически обновляемой строки в консоли (а не просто писал лог-сообщения с процентами), вам нужно вместо `log.info` использовать вывод в консоль с возвратом строки (`\r`). 
-
-Вот переработанный вариант вашего сервиса:
-
-### Изменённый `ProgressBarService`
-
-```java
 package ru.sberinsur.fileImporter.services;
 
 import org.springframework.stereotype.Service;
 
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Map;
 
 @Service
 public class ProgressBarService {
+
     private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
+    // Инициализация прогресса
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов равно количеству батчей
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Общее количество шагов
         progressBars.put(fileName, new ProgressBar(fileName, totalSteps));
-        System.out.printf("Начало импорта файла: %s с %d шагами (размер батча: %d)%n", fileName, totalSteps, batchSize);
+        System.out.printf("Начало импорта файла '%s' (всего шагов: %d)%n", fileName, totalSteps);
     }
 
+    // Обновление прогресса
     public void updateProgress(String fileName, int stepsCompleted) {
         ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
             progressBar.update(stepsCompleted);
-            progressBar.printProgress();
         }
     }
 
+    // Завершение прогресса
     public void completeProgress(String fileName) {
         ProgressBar progressBar = progressBars.remove(fileName);
         if (progressBar != null) {
             progressBar.complete();
-            progressBar.printProgress();
-            System.out.println(); // Перенос строки после завершения
-            System.out.printf("Импорт файла %s завершён.%n", fileName);
+            System.out.println(); // Переход на новую строку
+            System.out.printf("Импорт файла '%s' завершён.%n", fileName);
         }
     }
 
+    // Внутренний класс прогресс-бара
     private static class ProgressBar {
         private final String fileName;
         private final int totalSteps;
-        private int completedSteps;
+        private final AtomicInteger completedSteps;
 
         public ProgressBar(String fileName, int totalSteps) {
             this.fileName = fileName;
             this.totalSteps = totalSteps;
-            this.completedSteps = 0;
+            this.completedSteps = new AtomicInteger(0);
         }
 
         public synchronized void update(int steps) {
-            this.completedSteps = Math.min(this.completedSteps + steps, totalSteps);
-        }
-
-        public synchronized void printProgress() {
-            int percentage = getPercentage();
-            int barWidth = 50; // Длина прогресс-бара в символах
-            int filledWidth = (int) ((double) completedSteps / totalSteps * barWidth);
-
-            StringBuilder bar = new StringBuilder();
-            bar.append("\rИмпорт файла ").append(fileName).append(" [");
-            for (int i = 0; i < barWidth; i++) {
-                if (i < filledWidth) {
-                    bar.append("=");
-                } else {
-                    bar.append(" ");
-                }
-            }
-            bar.append("] ").append(percentage).append("%");
-
-            System.out.print(bar.toString());
+            completedSteps.addAndGet(steps);
+            printProgress();
         }
 
         public synchronized void complete() {
-            this.completedSteps = totalSteps;
+            completedSteps.set(totalSteps);
+            printProgress();
         }
 
-        private int getPercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
+        private void printProgress() {
+            int percentage = (int) (((double) completedSteps.get() / totalSteps) * 100);
+            int barWidth = 50; // Длина прогресс-бара в символах
+            int filledWidth = (int) ((double) completedSteps.get() / totalSteps * barWidth);
+
+            StringBuilder progressBar = new StringBuilder("\r");
+            progressBar.append("Импорт файла '").append(fileName).append("' [");
+            for (int i = 0; i < barWidth; i++) {
+                if (i < filledWidth) {
+                    progressBar.append("=");
+                } else {
+                    progressBar.append(" ");
+                }
+            }
+            progressBar.append("] ").append(percentage).append("%");
+
+            System.out.print(progressBar.toString());
+            if (percentage == 100) {
+                System.out.println(); // Добавляем перенос строки, если достигли 100%
+            }
         }
     }
 }
-```
-
----
-
-### Изменения:
-1. **Динамическое обновление консоли**:
-   - Используется `System.out.print("\r...")` для перерисовки строки прогресс-бара.
-   - Символ `\r` возвращает курсор в начало строки, позволяя переписать её.
-
-2. **Вывод прогресс-бара**:
-   - Добавлен визуальный прогресс-бар длиной 50 символов.
-   - Обновление прогресса происходит в реальном времени при вызове `updateProgress`.
-
-3. **Завершение прогресса**:
-   - После вызова `completeProgress`, добавляется перенос строки (`System.out.println()`), чтобы окончательный результат корректно завершил обновление строки.
-
----
-
-### Пример использования:
-
-```java
-public static void main(String[] args) throws InterruptedException {
-    ProgressBarService progressBarService = new ProgressBarService();
-    String fileName = "example.csv";
-    long totalRecords = 25000000L; // Общее количество строк
-    int batchSize = 1000000; // Размер батча
-
-    progressBarService.startProgress(fileName, totalRecords, batchSize);
-
-    int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
-    for (int i = 0; i < totalSteps; i++) {
-        Thread.sleep(500); // Эмуляция обработки батча
-        progressBarService.updateProgress(fileName, 1); // Увеличение прогресса на 1 шаг
-    }
-
-    progressBarService.completeProgress(fileName);
-}
-```
-
----
-
-### Пример вывода в консоли:
-
-```
-Начало импорта файла: example.csv с 25 шагами (размер батча: 1000000)
-Импорт файла example.csv [===================                       ] 52%
-Импорт файла example.csv [=========================================] 100%
-Импорт файла example.csv завершён.
-```
-
----
-
-### Особенности:
-- Прогресс обновляется в режиме реального времени.
-- Вывод остаётся чистым, без создания множества строк.
-- Вы можете легко интегрировать этот сервис в текущую логику импорта с батчами.
