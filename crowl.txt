@@ -1,3 +1,67 @@
+
+import java.io.PrintStream;
+
+public class ProgressBarService {
+
+    private final String fileName;
+    private final int totalSteps;
+    private final PrintStream out;
+    private int currentStep;
+
+    public ProgressBarService(String fileName, int totalSteps) {
+        this.fileName = fileName;
+        this.totalSteps = totalSteps;
+        this.out = System.out; // Поток вывода в консоль
+        this.currentStep = 0;
+
+        // Печатаем начальное состояние прогресса
+        printProgressBar();
+    }
+
+    // Увеличиваем текущий шаг и обновляем прогрессбар
+    public void step() {
+        currentStep++;
+        printProgressBar();
+    }
+
+    // Завершаем прогрессбар
+    public void finish() {
+        currentStep = totalSteps;
+        printProgressBar();
+        out.println(); // Перенос строки после завершения
+    }
+
+    // Печатаем прогрессбар в консоль
+    private void printProgressBar() {
+        StringBuilder bar = new StringBuilder();
+        int progressWidth = 50; // Ширина прогрессбара (в символах)
+        int filledWidth = (int) ((double) currentStep / totalSteps * progressWidth);
+
+        bar.append("\rИмпорт файла ").append(fileName).append(" [");
+        for (int i = 0; i < progressWidth; i++) {
+            if (i < filledWidth) {
+                bar.append("=");
+            } else {
+                bar.append(" ");
+            }
+        }
+        bar.append("] ").append(String.format("%d%%", (int) ((double) currentStep / totalSteps * 100)));
+
+        out.print(bar.toString());
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 Если вы выполняете обработку всех батчей в одной транзакции, это объясняет проблему. Дело в том, что пока транзакция не завершена, процесс вставки данных фактически не выполняется, а ваш прогресс обновляется только после того, как вся операция завершена.
 
 Чтобы корректно отображать прогресс, нужно учитывать следующее:
