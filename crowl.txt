@@ -1,85 +1,85 @@
-Ваши наблюдения могут быть связаны с несколькими проблемами:
+Чтобы вывести прогресс-бар в консоль в реальном времени, можно использовать `System.out` в сочетании с библиотеками для консоли или даже просто обновлять строку вручную с помощью `\r`. Вот как это сделать:
 
-1. **Прогресс-бар обновляется только после завершения задачи**: Это происходит, если операции ввода/вывода блокируют основной поток, и обновление прогресс-бара откладывается.
-2. **Короткий прогресс-бар**: Это может быть связано с настройками ширины консоли или количеством шагов, которые вы передаете в `ProgressBar`.
+### 1. **Обновление строки прогресса с использованием `\r`**
+Строка будет перезаписываться на одной линии в консоли.
 
-Давайте исправим эти проблемы:
-
----
-
-### Исправление 1: Обновление прогресс-бара в реальном времени
-
-Чтобы прогресс-бар отображался корректно во время выполнения, нужно убедиться, что выполнение задачи не блокирует обновление консоли. Для этого можно использовать отдельный поток для отображения прогресса. Библиотека `ProgressBar` уже поддерживает это через асинхронный режим.
-
-Добавим асинхронный прогресс-бар:
+### Пример класса `ProgressBarService`:
 
 ```java
-try (ProgressBar progressBar = new ProgressBarBuilder()
-        .setTaskName("Импорт файла")
-        .setInitialMax(totalBatches) // Общее количество батчей
-        .setUpdateIntervalMillis(100) // Обновление каждые 100 мс
-        .setStyle(ProgressBarStyle.ASCII) // ASCII-стиль для простого вывода
-        .build()) {
-    
-    // Логика обработки
-    for (CSVRecord record : records) {
-        // Обработка строк
-        if (count % BATCH_SIZE == 0) {
-            preparedStatement.executeBatch();
-            progressBar.step(); // Обновляем прогресс
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class ProgressBarService {
+    private final ConcurrentHashMap<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
+
+    public void startProgress(String fileName, int totalSteps) {
+        ProgressBar progressBar = new ProgressBar(fileName, totalSteps);
+        progressBars.put(fileName, progressBar);
+        progressBar.print(); // Печатаем первый раз
+    }
+
+    public void updateProgress(String fileName, int step) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.increment(step);
+            progressBar.print(); // Обновляем печать
         }
     }
 
-    // Если остались данные вне батча
-    if (count % BATCH_SIZE != 0) {
-        preparedStatement.executeBatch();
-        progressBar.step();
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+            progressBar.print(); // Финальная печать
+            progressBars.remove(fileName);
+        }
+    }
+
+    private static class ProgressBar {
+        private final String fileName;
+        private final int totalSteps;
+        private final AtomicInteger currentStep;
+
+        public ProgressBar(String fileName, int totalSteps) {
+            this.fileName = fileName;
+            this.totalSteps = totalSteps;
+            this.currentStep = new AtomicInteger(0);
+        }
+
+        public void increment(int step) {
+            currentStep.addAndGet(step);
+        }
+
+        public void complete() {
+            currentStep.set(totalSteps);
+        }
+
+        public void print() {
+            int progress = (int) ((double) currentStep.get() / totalSteps * 100);
+            int progressBars = progress / 2; // 50 символов в баре
+            String bar = "=".repeat(progressBars) + " ".repeat(50 - progressBars);
+            String progressLine = String.format("\rИмпорт файла (%s): [%s] %d%% (%d/%d)", 
+                                                fileName, bar, progress, currentStep.get(), totalSteps);
+            System.out.print(progressLine);
+            if (currentStep.get() >= totalSteps) {
+                System.out.println(); // Завершаем строку при окончании
+            }
+        }
     }
 }
 ```
 
----
-
-### Исправление 2: Увеличение длины прогресс-бара
-
-По умолчанию длина прогресс-бара зависит от ширины консоли, но вы можете задать её вручную:
-
-```java
-try (ProgressBar progressBar = new ProgressBarBuilder()
-        .setTaskName("Импорт файла")
-        .setInitialMax(totalBatches) // Общее количество батчей
-        .setUpdateIntervalMillis(100) // Обновление каждые 100 мс
-        .setStyle(ProgressBarStyle.ASCII) // ASCII-стиль для простого вывода
-        .setMaxRenderedLength(50) // Установка длины прогресс-бара
-        .build()) {
-    
-    // Логика обработки
-}
-```
-
-Укажите `setMaxRenderedLength(50)` или любое другое значение, чтобы прогресс-бар стал длиннее.
-
----
-
-### Полный исправленный код
-
-Вот обновленная функция `importCsvToDatabaseBatch` с прогресс-баром:
+### 2. **Изменение метода `importCsvToDatabaseBatch`**
+Обновите прогресс вызовами методов из `ProgressBarService`:
 
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    long totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
-    long totalBatches = (long) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество батчей
+    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
+    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalSteps);
 
-    try (ProgressBar progressBar = new ProgressBarBuilder()
-            .setTaskName("Импорт файла")
-            .setInitialMax(totalBatches) // Устанавливаем общее количество батчей
-            .setUpdateIntervalMillis(100) // Обновляем каждые 100 мс
-            .setStyle(ProgressBarStyle.ASCII) // Стиль ASCII
-            .setMaxRenderedLength(50) // Увеличиваем длину прогресс-бара
-            .build();
-         Reader reader = Files.newBufferedReader(csvFilePath);
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-        
         List<String> headers = csvParser.getHeaderNames().stream()
                 .flatMap(header -> splitHeader(header.trim()))
                 .map(header -> "\"" + header.trim() + "\"")
@@ -111,12 +111,12 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
-                    progressBar.step(); // Обновляем прогресс-бар после выполнения батча
+                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1);
                 }
             }
+            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
             if (count % BATCH_SIZE != 0) {
-                preparedStatement.executeBatch();
-                progressBar.step(); // Обновляем прогресс-бар для последнего батча
+                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1);
             }
         }
     } catch (Exception e) {
@@ -124,17 +124,23 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         log.error(ExceptionFilter.unwindMessages(message, e));
         description = ExceptionFilter.unwindMessages(message, e);
         throw new Exception(message + e.getMessage(), e);
+    } finally {
+        progressBarService.completeProgress(csvFilePath.getFileName().toString());
     }
     return true;
 }
 ```
 
----
+### 3. **Преимущества подхода**
+- Прогресс выводится на одной строке в консоли.
+- Строка обновляется по мере выполнения каждого батча.
+- Прогресс-бары для разных файлов могут работать одновременно, если вы используете многопоточность.
 
-### Результат
+### Пример вывода в консоли:
+Для файла с именем `example.csv`:
 
-1. Прогресс-бар будет отображаться в одной строке.
-2. Обновление будет происходить в реальном времени, без задержек.
-3. Длина прогресс-бара будет контролируемой (например, 50 символов).
+```
+Импорт файла (example.csv): [============================                    ] 60% (600/1000)
+```
 
-Если у вас всё еще будут вопросы или проблемы, дайте знать!
+Строка будет обновляться в реальном времени, оставаясь на одном месте до завершения.
