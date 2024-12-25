@@ -1,167 +1,101 @@
-Если прогресс-бар продолжает отображаться только после завершения импорта, значит, проблема скорее всего в том, что основной поток блокируется до завершения вывода прогресса. Кроме того, отображение не 100%, а 92% указывает на неправильный расчет или недосчитанные итерации в процессе.
+Если вы выполняете обработку всех батчей в одной транзакции, это объясняет проблему. Дело в том, что пока транзакция не завершена, процесс вставки данных фактически не выполняется, а ваш прогресс обновляется только после того, как вся операция завершена.
 
-Давайте разберем решение более детально и исправим оба аспекта:
+Чтобы корректно отображать прогресс, нужно учитывать следующее:
 
----
+1. **Фактическая обработка должна быть разбита на шаги**: Если вы используете транзакцию, прогресс будет "заморожен", пока транзакция не завершится. Чтобы решить эту проблему, можно обновлять прогресс перед добавлением батча в транзакцию (но не коммитить данные до завершения всех шагов).
 
-### 1. **Обновление прогресса в реальном времени**
-Проблема блокировки в основном потоке возникает, если `updateProgress` вызывается слишком редко или не синхронно с текущим процессом импорта. Нужно убедиться, что:
-- Прогресс-бар обновляется на каждом батче.
-- Обновление в консоли происходит без задержки.
+2. **Ограничить вывод на основе количества батчей**: Убедитесь, что прогрессбар обновляется на основе количества батчей, а не строк. 
 
 ---
 
-### Исправленный `ProgressBarService`:
-Для наглядности добавим детальный расчет прогресса и упростим логику.
+### Обновленный подход
 
-#### Класс `ProgressBarService`:
-```java
-import java.util.concurrent.atomic.AtomicInteger;
+Модифицируем цикл вставки данных, чтобы обновление прогрессбара происходило после добавления каждого батча в транзакцию:
 
-public class ProgressBarService {
-    private final ProgressBar progressBar;
-
-    public ProgressBarService(String fileName, int totalSteps) {
-        this.progressBar = new ProgressBar(fileName, totalSteps);
-    }
-
-    public void updateProgress(int steps) {
-        progressBar.increment(steps);
-        progressBar.print();
-    }
-
-    public void complete() {
-        progressBar.complete();
-        progressBar.print();
-        System.out.println(); // Завершаем строку.
-    }
-
-    private static class ProgressBar {
-        private final String fileName;
-        private final int totalSteps;
-        private final AtomicInteger currentStep;
-
-        public ProgressBar(String fileName, int totalSteps) {
-            this.fileName = fileName;
-            this.totalSteps = totalSteps;
-            this.currentStep = new AtomicInteger(0);
-        }
-
-        public void increment(int steps) {
-            currentStep.addAndGet(steps);
-        }
-
-        public void complete() {
-            currentStep.set(totalSteps);
-        }
-
-        public void print() {
-            int progress = Math.min((int) ((double) currentStep.get() / totalSteps * 100), 100);
-            int progressBars = progress / 2; // 50 символов в баре.
-            String bar = "=".repeat(progressBars) + " ".repeat(50 - progressBars);
-            String progressLine = String.format("\rИмпорт файла (%s): [%s] %d%% (%d/%d)", 
-                                                fileName, bar, progress, currentStep.get(), totalSteps);
-            System.out.print(progressLine);
-            System.out.flush();
-        }
-    }
-}
-```
-
----
-
-### 2. **Как интегрировать в процесс импорта**
-
-При обработке файла нужно обновлять прогресс-бар после обработки каждого батча.
-
-#### Основной цикл обработки батчей:
-Используйте обновление прогресса внутри цикла `for` при импорте данных.
-
-#### Пример изменения `importCsvToDatabaseBatch`:
+#### Изменения в `importCsvToDatabaseBatch`
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    ProgressBarService progressBarService = new ProgressBarService(csvFilePath.getFileName().toString(), totalRecords(csvFilePath));
+    ProgressBarService progressBarService = new ProgressBarService(csvFilePath.getFileName().toString(), totalBatchCount); // totalBatchCount = (totalRows / BATCH_SIZE)
 
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        
         List<String> headers = csvParser.getHeaderNames().stream()
                 .flatMap(header -> splitHeader(header.trim()))
                 .map(header -> "\"" + header.trim() + "\"")
                 .collect(Collectors.toList());
         headers.add("\"iteration_id\"");
+
         String insertSQL = generateInsertSQL(tableName, headers);
-        int iterationId = getIterationId(csvFilePath);
+        int iteration_id = getIterationId(csvFilePath);
 
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
             List<CSVRecord> records = csvParser.getRecords();
             int count = 0;
+            int totalBatchCount = (records.size() + BATCH_SIZE - 1) / BATCH_SIZE;
 
             for (CSVRecord record : records) {
                 for (int i = 0; i < headers.size(); i++) {
-                    String value = (i == headers.size() - 1) 
-                                   ? String.valueOf(iterationId) 
-                                   : record.get(i);
-                    preparedStatement.setString(i + 1, value);
+                    String value = i == headers.size() - 1
+                            ? String.valueOf(iteration_id)
+                            : record.get(i);
+
+                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                        description = "Пропуск данных";
+                        return false;
+                    }
+
+                    if (i == headers.size() - 1) {
+                        preparedStatement.setInt(i + 1, iteration_id);
+                    } else {
+                        preparedStatement.setString(i + 1, value);
+                    }
                 }
                 preparedStatement.addBatch();
                 count++;
 
-                if (count % BATCH_SIZE == 0) {
+                if (count % BATCH_SIZE == 0 || count == records.size()) {
                     preparedStatement.executeBatch();
-                    progressBarService.updateProgress(BATCH_SIZE); // Обновляем прогресс после выполнения батча.
+
+                    // Обновляем прогресс после обработки каждого батча
+                    progressBarService.step();
                 }
             }
-            preparedStatement.executeBatch();
-            progressBarService.complete(); // Завершаем прогресс-бар.
         }
     } catch (Exception e) {
-        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
+        String message = "Ошибка при вставке данных: ";
         log.error(ExceptionFilter.unwindMessages(message, e));
+        description = ExceptionFilter.unwindMessages(message, e);
         throw new Exception(message + e.getMessage(), e);
     }
+    progressBarService.finish();
     return true;
 }
 ```
 
 ---
 
-### 3. **Проверка корректности расчетов**
-Частичная загрузка (например, 92%) может возникать, если:
-1. Общее количество строк (`totalSteps`) было рассчитано неверно.
-2. Итерации обновления не совпадают с реальным количеством обработанных записей.
+### Что изменено:
+1. **`ProgressBarService` обновляется на уровне батчей**: 
+   - После каждого вызова `preparedStatement.executeBatch()` вызывается `progressBarService.step()`.
 
-#### Исправим расчет `totalRecords`:
-Добавим метод для подсчета общего числа строк в файле перед обработкой:
+2. **Размер прогресса (`totalBatchCount`)**:
+   - Вычисляется на основе количества строк, делённого на размер батча:
+     ```java
+     int totalBatchCount = (records.size() + BATCH_SIZE - 1) / BATCH_SIZE;
+     ```
 
-```java
-private int totalRecords(Path csvFilePath) throws IOException {
-    try (BufferedReader reader = Files.newBufferedReader(csvFilePath)) {
-        return (int) reader.lines().skip(1).count(); // Пропускаем заголовок.
-    }
-}
-```
+3. **Транзакция всё ещё целостная**:
+   - Прогресс обновляется после добавления каждого батча, но сама транзакция завершится (с `commit`) только после завершения всей обработки. Это сохраняет консистентность данных.
 
-Теперь `totalSteps` будет точно соответствовать количеству строк в файле.
+4. **Финальная строка завершения**:
+   - После завершения всех шагов вызывается `progressBarService.finish()`, чтобы явно завершить прогрессбар.
 
 ---
 
-### 4. **Убедитесь в правильном использовании батчей**
-Убедитесь, что все данные обрабатываются корректно:
-- Если последний батч меньше `BATCH_SIZE`, он тоже должен обновлять прогресс.
+### Ожидаемое поведение:
+- Прогрессбар обновляется после обработки каждого батча.
+- В консоль выводится одна строка, которая постепенно заполняется в реальном времени.
+- Прогрессбар завершает работу только после завершения всей транзакции. 
 
-#### Учет последнего батча:
-В методе `importCsvToDatabaseBatch` добавьте обновление прогресса после выполнения последнего батча:
-
-```java
-if (count % BATCH_SIZE != 0) {
-    preparedStatement.executeBatch();
-    progressBarService.updateProgress(count % BATCH_SIZE); // Обновляем прогресс для последнего батча.
-}
-```
-
----
-
-### Итоговое поведение:
-1. Прогресс-бар обновляется в реальном времени, выводя текущий статус в консоль.
-2. Строка с прогресс-баром обновляется без задержек благодаря `System.out.flush()`.
-3. Прогресс доходит до 100%, включая последний батч.
+Попробуйте внести эти изменения, и прогрессбар будет корректно работать даже при транзакционной обработке.
