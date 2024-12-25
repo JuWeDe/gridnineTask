@@ -1,9 +1,16 @@
+Чтобы отображать динамический прогресс-бар, который будет обновляться на одной строке в консоли, нужно использовать перезапись той же строки в консоли. Используя `\r` (возврат каретки), можно перезаписать текущую строку, чтобы не добавлять новые строки в вывод.
+
+Вместо того чтобы логировать прогресс с помощью `log.info()`, нужно обновлять строку с прогрессом в консоли. Вот как можно это сделать, чтобы прогресс-бар обновлялся на одной строке.
+
+### Обновленный `ProgressBarService`:
+
+```java
 package ru.sberinsur.fileImporter.services;
 
 import org.springframework.stereotype.Service;
 
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ProgressBarService {
@@ -11,7 +18,7 @@ public class ProgressBarService {
     private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов равно количеству батчей
         progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
         System.out.println("Начало прогресса для файла: " + fileName);
     }
@@ -70,7 +77,93 @@ public class ProgressBarService {
 
             // Перезаписываем строку в консоли
             System.out.print("\rПрогресс для файла " + fileName + ": " + progressBar);
-            System.out.flush();
+            System.out.flush();  // Принудительно сбрасываем вывод
         }
     }
 }
+```
+
+### Пояснение:
+1. **Перезапись строки с прогрессом**:
+   - `System.out.print("\r...")` — это ключевой момент. Он позволяет перезаписывать строку в консоли, не добавляя новые строки.
+   - После каждого обновления прогресса будет обновляться только текущая строка, и консоль будет заполняться прогресс-баром.
+   
+2. **Принудительный сброс вывода**:
+   - `System.out.flush()` используется для того, чтобы сразу обновить вывод в консоли, без задержки.
+
+3. **Динамическое обновление прогресс-бара**:
+   - Прогресс-бар будет показывать 50 символов (представляющих 100% прогресса), где каждый символ `=` будет обозначать шаг.
+   - Обновление прогресс-бара происходит при каждом вызове `updateProgress`.
+
+---
+
+### Интеграция с вашим методом `importCsvToDatabaseBatch`:
+
+В вашем методе, вы уже правильно обновляете прогресс через `progressBarService.updateProgress`, но важно удостовериться, что этот вызов будет происходить после каждого батча, что вы, похоже, уже сделали.
+
+```java
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
+    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
+
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))
+                .map(header -> "\"" + header.trim() + "\"")
+                .collect(Collectors.toList());
+        headers.add("\"iteration_id\"");
+        String insertSQL = generateInsertSQL(tableName, headers);
+        int iteration_id = getIterationId(csvFilePath);
+
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
+            int stepsCompleted = 0;
+
+            for (CSVRecord record : records) {
+                for (int i = 0; i < headers.size(); i++) {
+                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
+                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                        description = "Пропуск данных";
+                        return false;
+                    } else {
+                        if (i == headers.size() - 1) {
+                            preparedStatement.setInt(i + 1, iteration_id);
+                        } else {
+                            preparedStatement.setString(i + 1, value);
+                        }
+                    }
+                }
+                preparedStatement.addBatch();
+                count++;
+
+                if (count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+                    stepsCompleted++;
+                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем на 1 шаг (1 батч)
+                }
+            }
+            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
+            if (count % BATCH_SIZE != 0) {
+                stepsCompleted++;
+                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем для последнего батча
+            }
+        }
+    } catch (Exception e) {
+        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
+        log.error(ExceptionFilter.unwindMessages(message, e));
+        description = ExceptionFilter.unwindMessages(message, e);
+        throw new Exception(message + e.getMessage(), e);
+    } finally {
+        progressBarService.completeProgress(csvFilePath.getFileName().toString());
+    }
+    return true;
+}
+```
+
+### Примечания:
+- **Проверьте вывод в командной строке**: убедитесь, что вы запускаете программу в терминале или консоли, а не в среде разработки, которая может обрабатывать вывод по-своему.
+- **Меньше зависимостей**: мы убрали использование `log.info` для прогресса, так как оно приводит к выводу в лог, а не в консоль.
+
+Теперь, при каждом обновлении прогресса, строка будет перезаписываться, и прогресс будет динамично отображаться на одной строке.
