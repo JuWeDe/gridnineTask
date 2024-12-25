@@ -1,26 +1,46 @@
-Если размер прогресса должен быть рассчитан на основе размера **BATCH_SIZE**, нужно корректно рассчитать количество шагов прогресса, основываясь на общем количестве строк в файле и размере батча. Вот как это можно реализовать:
+Для работы с прогресс-баром через библиотеку, вы можете использовать библиотеку **`ProgressBar`** (например, `me.tongfei:progressbar`). Это популярная библиотека для отображения прогресса в консоли.
 
-### Изменение `ProgressBarService`
-Обновим логику для использования размера батча:
+---
 
-```java
-public void startProgress(String fileName, int totalRecords, int batchSize) {
-    int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов равно количеству батчей
-    progressBars.put(fileName, new ProgressBar(totalSteps));
-    log.info("Начало прогресса для файла {} с {} шагами (размер батча: {})", fileName, totalSteps, batchSize);
-}
+### Шаги интеграции библиотеки `ProgressBar`
+
+1. Добавьте зависимость в ваш проект:
+
+**Для Maven:**
+
+```xml
+<dependency>
+    <groupId>me.tongfei</groupId>
+    <artifactId>progressbar</artifactId>
+    <version>0.9.5</version>
+</dependency>
 ```
 
-### Изменение метода `importCsvToDatabaseBatch`
-Теперь прогресс будет отслеживаться на уровне батчей, а не строк:
+**Для Gradle:**
+
+```gradle
+implementation 'me.tongfei:progressbar:0.9.5'
+```
+
+2. Используйте `ProgressBar` в вашем коде.
+
+---
+
+### Обновление `importCsvToDatabaseBatch`
+
+Добавим прогресс-бар, который обновляется в зависимости от батчей:
 
 ```java
-private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    int totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
-    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
+import me.tongfei.progressbar.ProgressBar;
 
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    long totalRecords = countLines(csvFilePath) - 1; // Общее количество строк без заголовка
+    long totalBatches = (long) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество батчей
+
+    try (ProgressBar progressBar = new ProgressBar("Импорт файла", totalBatches); // Создаем прогресс-бар
+         Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+        
         List<String> headers = csvParser.getHeaderNames().stream()
                 .flatMap(header -> splitHeader(header.trim()))
                 .map(header -> "\"" + header.trim() + "\"")
@@ -32,7 +52,6 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
             List<CSVRecord> records = csvParser.getRecords();
             int count = 0;
-            int stepsCompleted = 0;
 
             for (CSVRecord record : records) {
                 for (int i = 0; i < headers.size(); i++) {
@@ -53,14 +72,12 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
-                    stepsCompleted++;
-                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем на 1 шаг (1 батч)
+                    progressBar.step(); // Обновляем прогресс-бар после выполнения батча
                 }
             }
-            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
             if (count % BATCH_SIZE != 0) {
-                stepsCompleted++;
-                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем для последнего батча
+                preparedStatement.executeBatch();
+                progressBar.step(); // Обновляем прогресс-бар для последнего батча
             }
         }
     } catch (Exception e) {
@@ -68,31 +85,31 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         log.error(ExceptionFilter.unwindMessages(message, e));
         description = ExceptionFilter.unwindMessages(message, e);
         throw new Exception(message + e.getMessage(), e);
-    } finally {
-        progressBarService.completeProgress(csvFilePath.getFileName().toString());
     }
     return true;
 }
 ```
 
-### Подсчет строк файла
-Для подсчета строк в файле используем метод `countLines`:
+---
 
-```java
-private int countLines(Path filePath) throws IOException {
-    try (Stream<String> lines = Files.lines(filePath)) {
-        return (int) lines.count();
-    }
-}
+### Пример отображения прогресса в консоли
+
+При запуске кода с файлом на 20 млн строк и размером батча 10 000, прогресс-бар будет выглядеть так:
+
+```
+Импорт файла  57% [=====================>-------------] 11432/20000 (10:32)
 ```
 
-### Итоговая логика
-1. **Прогресс бар** создается с количеством шагов, равным `totalRecords / BATCH_SIZE`.
-2. На каждом выполнении батча прогресс обновляется на 1 шаг.
-3. Последний шаг обновляется, если общее количество строк не делится нацело на размер батча.
-4. Логирование происходит в формате, отражающем состояние прогресса в процентах.
+Где:
+- **57%** — текущий прогресс.
+- **[=====================>-------------]** — визуальное отображение прогресса.
+- **11432/20000** — текущий номер батча / общее количество батчей.
+- **(10:32)** — расчетное оставшееся время.
 
-### Пример работы
-Если у вас файл с 20 млн строк и размер батча равен 10 000:
-- Общее количество шагов: \( \frac{20\ 000\ 000}{10\ 000} = 2\ 000 \).
-- Прогресс бар будет обновляться каждые 10 000 строк.
+---
+
+### Примечания
+
+1. `ProgressBar` автоматически завершает строку при достижении 100%.
+2. Прогресс-бар не создает много строк в логах, так как обновляет текущее состояние на одной строке.
+3. Если вы хотите логировать прогресс в файл, можно дополнительно настроить вывод через `ProgressBarBuilder`.
