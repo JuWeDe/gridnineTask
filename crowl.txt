@@ -1,181 +1,66 @@
-Отлично! Использование JLine3 для вывода прогресс-бара в терминал — это отличный выбор, так как JLine3 предоставляет более удобные и гибкие возможности для работы с выводом в терминале, включая работу с прогресс-барами.
-
-Вот как можно интегрировать JLine3 для динамического прогресс-бара в вашем методе `importCsvToDatabaseBatch`.
-
-### 1. Добавление зависимости JLine3
-
-Если у вас еще не добавлена зависимость JLine3 в проект, добавьте её в `pom.xml` (для Maven):
-
-```xml
-<dependency>
-    <groupId>org.jline</groupId>
-    <artifactId>jline-terminal</artifactId>
-    <version>3.19.0</version>
-</dependency>
-```
-
-Для Gradle:
-
-```gradle
-implementation 'org.jline:jline-terminal:3.19.0'
-```
-
-### 2. Интеграция с JLine3 для прогресс-бара
-
-Теперь, когда зависимость добавлена, давайте обновим ваш код, чтобы использовать JLine3 для вывода прогресс-бара в терминал. Мы будем использовать `Terminal` и `ProgressBar` из JLine3 для динамичного отображения прогресса в одном ряду.
-
-### 3. Пример с использованием JLine3
-
-Вот пример того, как интегрировать прогресс-бар с JLine3 в вашем методе импорта:
-
-```java
+import me.tongfei.progressbar.ProgressBar;
+import me.tongfei.progressbar.ProgressBarStyle;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
-import org.jline.utils.InfoCmp;
-import org.jline.utils.WCWidth;
+import com.googlecode.lanterna.TerminalSize;
+import com.googlecode.lanterna.TextColor;
+import com.googlecode.lanterna.screen.Screen;
+import com.googlecode.lanterna.screen.TerminalScreen;
+import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
+import com.googlecode.lanterna.terminal.Terminal;
 
-import java.io.IOException;
-import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+public class CombinedProgressBarDemo {
+    public static void main(String[] args) throws Exception {
+        int totalSteps = 100;
 
-public class CsvImporter {
-
-    private static final int BATCH_SIZE = 1000; // Размер батча для записи
-    private AtomicInteger stepsCompleted = new AtomicInteger(0); // Число завершенных шагов
-    private Terminal terminal;
-
-    public CsvImporter() throws IOException {
-        // Создаем терминал
-        terminal = TerminalBuilder.builder().build();
-    }
-
-    public boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-        long totalRecords = fileIteration.getRows(); // Вычисляем количество записей
-        int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
-
-        // Создаем прогресс-бар с заданной длиной
-        String message = "Импорт данных в базу для файла " + csvFilePath.getFileName();
-        int progressBarLength = Math.min(WCWidth.getWidth(terminal.getTerminal()), 50); // Ширина прогресс-бара
-        ProgressBar progressBar = new ProgressBar(terminal, progressBarLength, message);
-
-        try (Reader reader = Files.newBufferedReader(csvFilePath);
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-            List<String> headers = csvParser.getHeaderNames().stream()
-                    .flatMap(header -> splitHeader(header.trim()))
-                    .map(header -> "\"" + header.trim() + "\"")
-                    .collect(Collectors.toList());
-            headers.add("\"iteration_id\"");
-            String insertSQL = generateInsertSQL(tableName, headers);
-            int iteration_id = getIterationId(csvFilePath);
-
-            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-                List<CSVRecord> records = csvParser.getRecords();
-                int count = 0;
-
-                for (CSVRecord record : records) {
-                    for (int i = 0; i < headers.size(); i++) {
-                        String value;
-                        if (i == headers.size() - 1) {
-                            value = String.valueOf(iteration_id);
-                        } else {
-                            value = record.get(i);
-                        }
-                        if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
-                            description = "Пропуск данных";
-                            return false;
-                        } else {
-                            if (i == headers.size() - 1) {
-                                preparedStatement.setInt(i + 1, iteration_id);
-                            } else {
-                                preparedStatement.setString(i + 1, value);
-                            }
-                        }
-                    }
-
-                    preparedStatement.addBatch();
-                    count++;
-                    if (count % BATCH_SIZE == 0) {
-                        preparedStatement.executeBatch();
-                        stepsCompleted.incrementAndGet();
-                        progressBar.updateProgress(stepsCompleted.get(), totalSteps); // Обновляем прогресс-бар
-                    }
-                }
-
-                preparedStatement.executeBatch(); // Выполнение оставшихся записей
-                if (count % BATCH_SIZE != 0) {
-                    stepsCompleted.incrementAndGet();
-                    progressBar.updateProgress(stepsCompleted.get(), totalSteps); // Обновляем для последнего батча
-                }
+        // === 1. ConsoleProgressBar ===
+        System.out.println("=== ConsoleProgressBar ===");
+        try (ProgressBar pb = new ProgressBar("Processing", totalSteps, ProgressBarStyle.ASCII)) {
+            for (int i = 0; i <= totalSteps; i++) {
+                pb.step(); // Увеличиваем прогресс
+                Thread.sleep(20); // Имитация работы
             }
-        } catch (Exception e) {
-            String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
-            log.error(ExceptionFilter.unwindMessages(message, e));
-            description = ExceptionFilter.unwindMessages(message, e);
-            throw new Exception(message + e.getMessage(), e);
         }
 
-        terminal.writer().println(); // Печатаем пустую строку после завершения
-        terminal.flush();
-        return true;
-    }
-
-    private static class ProgressBar {
-        private final Terminal terminal;
-        private final int barLength;
-        private final String message;
-
-        public ProgressBar(Terminal terminal, int barLength, String message) {
-            this.terminal = terminal;
-            this.barLength = barLength;
-            this.message = message;
-        }
-
-        public void updateProgress(int currentStep, int totalSteps) {
-            int percentage = (int) ((double) currentStep / totalSteps * 100);
-            int completedLength = (int) ((percentage / 100.0) * barLength);
-
-            StringBuilder progress = new StringBuilder(message);
-            progress.append(" [");
-
-            for (int i = 0; i < barLength; i++) {
-                if (i < completedLength) {
-                    progress.append("█"); // Заполненная часть
-                } else {
-                    progress.append("░"); // Не заполненная часть
-                }
-            }
-
-            progress.append("] ").append(percentage).append("%");
-            terminal.writer().print(progress.toString());
+        // === 2. JLine3 ProgressBar ===
+        System.out.println("\n=== JLine3 ProgressBar ===");
+        Terminal terminal = TerminalBuilder.terminal();
+        String[] spinner = {"|", "/", "-", "\\"}; // Анимация спиннера
+        for (int i = 0; i <= totalSteps; i++) {
+            int progress = (int) ((i / (double) totalSteps) * 100);
+            String animation = spinner[i % spinner.length];
+            terminal.writer().print("\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "% " + animation);
             terminal.flush();
-
-            // Перезаписываем строку прогресса
-            terminal.writer().print("\r");
+            Thread.sleep(20); // Имитация работы
         }
+        terminal.writer().println("\nDone!");
+
+        // === 3. Lanterna ProgressBar ===
+        System.out.println("\n=== Lanterna ProgressBar ===");
+        Terminal lanternaTerminal = new DefaultTerminalFactory().createTerminal();
+        Screen screen = new TerminalScreen(lanternaTerminal);
+        screen.startScreen();
+        screen.setCursorPosition(null); // Скрыть курсор
+
+        for (int i = 0; i <= totalSteps; i++) {
+            String progressBar = "[" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "]";
+            screen.clear();
+            screen.newTextGraphics().setForegroundColor(TextColor.ANSI.CYAN)
+                                    .putString(10, 5, "Progress: " + progressBar + " " + i + "%");
+            screen.refresh();
+            Thread.sleep(20); // Имитация работы
+        }
+        screen.stopScreen();
+
+        // === 4. Custom ProgressBar ===
+        System.out.println("\n=== Custom ProgressBar ===");
+        for (int i = 0; i <= totalSteps; i++) {
+            int progress = (int) ((i / (double) totalSteps) * 100);
+            String bar = "[" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "]";
+            String animation = spinner[i % spinner.length];
+            System.out.print("\rProgress: " + bar + " " + progress + "% " + animation);
+            Thread.sleep(20); // Имитация работы
+        }
+        System.out.println("\nDone!");
     }
 }
-```
-
-### Объяснение:
-
-1. **Terminal и ProgressBar**:
-   - Мы используем `TerminalBuilder` для создания терминала. Это позволяет нам использовать JLine3 для работы с выводом.
-   - В классе `ProgressBar` мы создаем прогресс-бар, который обновляется в терминале. Мы обновляем его на основе процента завершения, вычисляя, сколько символов `█` должно быть отображено для текущего процента.
-
-2. **Метод `updateProgress`**:
-   - Метод обновляет прогресс-бар, вычисляя количество заполненных символов прогресса в зависимости от процента. Для этого мы используем вычисление на основе общего количества шагов и текущего количества выполненных шагов.
-   - Прогресс-бар обновляется в одном ряду с помощью `terminal.writer().print("\r")`, что позволяет переписать строку прогресса.
-
-3. **Использование `AtomicInteger` для шагов**:
-   - `stepsCompleted` отслеживает количество завершенных шагов, что позволяет корректно обновлять прогресс, независимо от того, выполняется ли операция в многозадачной среде.
-
-4. **Задержка `Thread.sleep(50)`**:
-   - Для плавности обновлений, задержка между обновлениями прогресс-бара позволяет избежать слишком быстрого обновления и делает прогресс более видимым.
-
-### Результат:
-
-Теперь прогресс-бар будет обновляться динамически в одном ряду, перерисовывая шкалу прогресса с каждым обновлением. Вы сможете видеть прогресс импорта данных в реальном времени, и процентное значение будет обновляться на каждом шаге.
