@@ -1,32 +1,178 @@
-import com.googlecode.lanterna.TerminalSize;
-import com.googlecode.lanterna.TextColor;
-import com.googlecode.lanterna.graphics.TextGraphics;
-import com.googlecode.lanterna.screen.Screen;
-import com.googlecode.lanterna.screen.TerminalScreen;
-import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
-import com.googlecode.lanterna.terminal.Terminal;
+Понял, начнем с нуля. 
 
-public class LanternaProgressBarDemo {
-    public static void main(String[] args) throws Exception {
-        Terminal terminal = new DefaultTerminalFactory().createTerminal();
-        Screen screen = new TerminalScreen(terminal);
+Я сделаю решение, которое соответствует вашему описанию: прогресс-бар должен **динамически обновляться в одной строке**, начинаться с 0% и доходить до 100%, обновляясь по мере выполнения работы.
 
-        try {
-            screen.startScreen();
-            screen.setCursorPosition(null); // Скрыть курсор
+Мы подойдем к этому так, чтобы код был гибким, понятным, и легко поддерживался. Ниже описан подход.
 
-            int total = 100;
-            TextGraphics graphics = screen.newTextGraphics();
-            for (int i = 0; i <= total; i++) {
-                String progressBar = "[" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "]";
-                graphics.setForegroundColor(TextColor.ANSI.GREEN);
-                graphics.putString(10, 5, "Progress: " + progressBar + " " + i + "%");
-                screen.refresh();
-                Thread.sleep(50); // Имитация работы
+---
+
+### 1. **Что мы будем использовать**
+- Мы будем работать с терминалом через стандартный Java вывод (`System.out.print`), чтобы обновлять строку.
+- Реализуем простой и независимый класс `ProgressBar`, который будет отвечать за отрисовку прогресс-бара в терминале.
+- Прогресс-бар будет обновляться динамически: каждый раз, когда вы передаете текущее состояние выполнения (например, количество обработанных батчей), строка будет перерисовываться.
+
+---
+
+### 2. **Реализация ProgressBar**
+Создаем класс `ProgressBar`. Этот класс можно повторно использовать для любых задач, где нужен прогресс.
+
+```java
+public class ProgressBar {
+
+    private final int barLength; // Длина прогресс-бара в символах
+    private final String taskName; // Название задачи
+    private int totalSteps; // Общее количество шагов
+    private int currentStep = 0; // Текущий шаг выполнения
+
+    public ProgressBar(String taskName, int totalSteps, int barLength) {
+        this.taskName = taskName;
+        this.totalSteps = totalSteps;
+        this.barLength = barLength;
+    }
+
+    public synchronized void update(int completedSteps) {
+        this.currentStep = completedSteps;
+
+        // Вычисляем прогресс в процентах
+        int percentage = (int) ((double) currentStep / totalSteps * 100);
+        int completedBars = (int) ((percentage / 100.0) * barLength);
+
+        // Генерируем строку прогресс-бара
+        StringBuilder progress = new StringBuilder();
+        progress.append("\r") // Возвращаем каретку в начало строки
+                .append(taskName)
+                .append(" [");
+
+        for (int i = 0; i < barLength; i++) {
+            if (i < completedBars) {
+                progress.append("█");
+            } else {
+                progress.append("░");
             }
-        } finally {
-            screen.stopScreen();
-            terminal.close();
         }
+
+        progress.append("] ").append(percentage).append("%");
+
+        // Выводим прогресс-бар в одной строке
+        System.out.print(progress.toString());
+    }
+
+    public synchronized void complete() {
+        update(totalSteps);
+        System.out.println(); // Завершаем строку после 100%
     }
 }
+```
+
+---
+
+### 3. **Интеграция в метод `importCsvToDatabaseBatch`**
+Теперь обновляем ваш метод, чтобы использовать наш `ProgressBar`. Прогресс-бар будет обновляться по мере обработки каждого батча данных.
+
+```java
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    long totalRecords = fileIteration.getRows(); // Общее количество записей
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество шагов = количество батчей
+
+    // Создаем прогресс-бар
+    ProgressBar progressBar = new ProgressBar("Импорт файла " + csvFilePath.getFileName(), totalSteps, 50);
+    progressBar.update(0); // Инициализация с 0%
+
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))
+                .map(header -> "\"" + header.trim() + "\"")
+                .collect(Collectors.toList());
+        headers.add("\"iteration_id\"");
+        String insertSQL = generateInsertSQL(tableName, headers);
+        int iteration_id = getIterationId(csvFilePath);
+
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0;
+
+            for (CSVRecord record : records) {
+                for (int i = 0; i < headers.size(); i++) {
+                    String value;
+                    if (i == headers.size() - 1) {
+                        value = String.valueOf(iteration_id);
+                    } else {
+                        value = record.get(i);
+                    }
+                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                        description = "Пропуск данных";
+                        return false;
+                    } else {
+                        if (i == headers.size() - 1) {
+                            preparedStatement.setInt(i + 1, iteration_id);
+                        } else {
+                            preparedStatement.setString(i + 1, value);
+                        }
+                    }
+                }
+
+                preparedStatement.addBatch();
+                count++;
+
+                if (count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+
+                    // Обновляем прогресс-бар
+                    int completedSteps = count / BATCH_SIZE;
+                    progressBar.update(completedSteps);
+                }
+            }
+
+            preparedStatement.executeBatch(); // Выполнение оставшихся записей
+            if (count % BATCH_SIZE != 0) {
+                int completedSteps = (int) Math.ceil((double) count / BATCH_SIZE);
+                progressBar.update(completedSteps);
+            }
+        }
+    } catch (Exception e) {
+        String message = "Ошибка при импорте файла " + csvFilePath.getFileName() + ": ";
+        log.error(message, e);
+        throw new Exception(message, e);
+    } finally {
+        progressBar.complete(); // Завершаем прогресс-бар (100%)
+    }
+
+    return true;
+}
+```
+
+---
+
+### 4. **Как это работает**
+1. **Инициализация прогресс-бара**:
+   - Прогресс-бар создается перед началом цикла, где идет обработка батчей.
+   - Он принимает имя задачи, общее количество шагов и длину прогресс-бара в символах.
+
+2. **Обновление прогресса**:
+   - В каждой итерации цикла, когда батч данных обработан и записан в базу, вызывается `progressBar.update(completedSteps)` с количеством завершенных шагов.
+
+3. **Завершение прогресса**:
+   - В блоке `finally`, после завершения всех операций, вызывается `progressBar.complete()`, чтобы завершить строку и зафиксировать результат.
+
+---
+
+### 5. **Пример вывода**
+Пример прогресса в терминале:
+
+```
+Импорт файла data.csv [█████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 54%
+```
+
+Прогресс будет обновляться в **одной строке** по мере выполнения.
+
+---
+
+### 6. **Почему это решение хорошее?**
+- **Минимализм**: Простая реализация с небольшим количеством кода.
+- **Гибкость**: Легко масштабируется для других задач (например, обработки больших данных или загрузки файлов).
+- **Динамичность**: Прогресс обновляется в одной строке без создания лишнего вывода.
+- **Повторное использование**: Класс `ProgressBar` можно использовать в других методах или проектах.
+
+Если у вас есть еще вопросы или это нужно доработать, дайте знать!
