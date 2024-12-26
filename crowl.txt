@@ -1,28 +1,36 @@
-Понял, начнем с нуля. 
+Понял проблему, давайте исправим ситуацию.
 
-Я сделаю решение, которое соответствует вашему описанию: прогресс-бар должен **динамически обновляться в одной строке**, начинаться с 0% и доходить до 100%, обновляясь по мере выполнения работы.
+Динамическое обновление прогресс-бара не работает, потому что `System.out.print()` с `\r` правильно работает только при своевременном выводе. Это может блокироваться следующими факторами:
 
-Мы подойдем к этому так, чтобы код был гибким, понятным, и легко поддерживался. Ниже описан подход.
+1. **Буферизация вывода**: `System.out` по умолчанию буферизуется и выводится только при завершении программы или при явном вызове `flush()`.
+2. **Блокировка цикла выполнения**: Прогресс-бар обновляется, но из-за долгих операций внутри цикла (`PreparedStatement.executeBatch()` и других) вывод задерживается.
 
----
-
-### 1. **Что мы будем использовать**
-- Мы будем работать с терминалом через стандартный Java вывод (`System.out.print`), чтобы обновлять строку.
-- Реализуем простой и независимый класс `ProgressBar`, который будет отвечать за отрисовку прогресс-бара в терминале.
-- Прогресс-бар будет обновляться динамически: каждый раз, когда вы передаете текущее состояние выполнения (например, количество обработанных батчей), строка будет перерисовываться.
+Для исправления:
 
 ---
 
-### 2. **Реализация ProgressBar**
-Создаем класс `ProgressBar`. Этот класс можно повторно использовать для любых задач, где нужен прогресс.
+### Финальное решение: Динамический прогресс-бар
+
+Мы сделаем так:
+1. Используем отдельный поток для динамического обновления прогресс-бара.
+2. Прогресс-бар будет обновляться в реальном времени по мере выполнения основной работы.
+3. Все обновления будут видны в **одной строке** с перерисовкой.
+
+---
+
+### 1. Обновленный `ProgressBar`
 
 ```java
+import java.util.concurrent.atomic.AtomicInteger;
+
 public class ProgressBar {
 
     private final int barLength; // Длина прогресс-бара в символах
     private final String taskName; // Название задачи
-    private int totalSteps; // Общее количество шагов
-    private int currentStep = 0; // Текущий шаг выполнения
+    private final int totalSteps; // Общее количество шагов
+    private final AtomicInteger currentStep = new AtomicInteger(0); // Текущий шаг выполнения
+
+    private volatile boolean running = true; // Контроль для остановки прогресса
 
     public ProgressBar(String taskName, int totalSteps, int barLength) {
         this.taskName = taskName;
@@ -30,14 +38,38 @@ public class ProgressBar {
         this.barLength = barLength;
     }
 
-    public synchronized void update(int completedSteps) {
-        this.currentStep = completedSteps;
+    public void start() {
+        Thread progressThread = new Thread(() -> {
+            while (running) {
+                printProgress();
+                try {
+                    Thread.sleep(100); // Обновляем прогресс каждые 100 мс
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            // Завершающий вывод при остановке
+            printProgress();
+            System.out.println();
+        });
+        progressThread.setDaemon(true);
+        progressThread.start();
+    }
 
-        // Вычисляем прогресс в процентах
-        int percentage = (int) ((double) currentStep / totalSteps * 100);
+    public void update(int completedSteps) {
+        currentStep.set(completedSteps);
+    }
+
+    public void complete() {
+        currentStep.set(totalSteps);
+        running = false;
+    }
+
+    private void printProgress() {
+        int completedSteps = currentStep.get();
+        int percentage = (int) ((double) completedSteps / totalSteps * 100);
         int completedBars = (int) ((percentage / 100.0) * barLength);
 
-        // Генерируем строку прогресс-бара
         StringBuilder progress = new StringBuilder();
         progress.append("\r") // Возвращаем каретку в начало строки
                 .append(taskName)
@@ -53,21 +85,16 @@ public class ProgressBar {
 
         progress.append("] ").append(percentage).append("%");
 
-        // Выводим прогресс-бар в одной строке
         System.out.print(progress.toString());
-    }
-
-    public synchronized void complete() {
-        update(totalSteps);
-        System.out.println(); // Завершаем строку после 100%
     }
 }
 ```
 
 ---
 
-### 3. **Интеграция в метод `importCsvToDatabaseBatch`**
-Теперь обновляем ваш метод, чтобы использовать наш `ProgressBar`. Прогресс-бар будет обновляться по мере обработки каждого батча данных.
+### 2. Интеграция в метод `importCsvToDatabaseBatch`
+
+Обновленный метод:
 
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
@@ -76,7 +103,7 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
     // Создаем прогресс-бар
     ProgressBar progressBar = new ProgressBar("Импорт файла " + csvFilePath.getFileName(), totalSteps, 50);
-    progressBar.update(0); // Инициализация с 0%
+    progressBar.start(); // Запускаем прогресс-бар в отдельном потоке
 
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
@@ -145,34 +172,29 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
 ---
 
-### 4. **Как это работает**
-1. **Инициализация прогресс-бара**:
-   - Прогресс-бар создается перед началом цикла, где идет обработка батчей.
-   - Он принимает имя задачи, общее количество шагов и длину прогресс-бара в символах.
+### Как это работает
+1. **Асинхронное обновление прогресса**:
+   - Прогресс-бар запускается в отдельном потоке (`progressBar.start()`).
+   - Отдельный поток регулярно вызывает метод `printProgress`, перерисовывая строку в консоли.
 
-2. **Обновление прогресса**:
-   - В каждой итерации цикла, когда батч данных обработан и записан в базу, вызывается `progressBar.update(completedSteps)` с количеством завершенных шагов.
+2. **Обновление данных**:
+   - После обработки каждого батча (внутри цикла) вызывается `progressBar.update(completedSteps)`.
+   - Это позволяет обновлять состояние прогресс-бара на основе текущего числа завершенных шагов.
 
-3. **Завершение прогресса**:
-   - В блоке `finally`, после завершения всех операций, вызывается `progressBar.complete()`, чтобы завершить строку и зафиксировать результат.
+3. **Завершение**:
+   - После завершения работы основной программы вызывается `progressBar.complete()`, чтобы остановить поток и завершить вывод.
 
 ---
 
-### 5. **Пример вывода**
+### Пример вывода
 Пример прогресса в терминале:
 
 ```
-Импорт файла data.csv [█████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 54%
+Импорт файла data.csv [██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 40%
 ```
 
-Прогресс будет обновляться в **одной строке** по мере выполнения.
+- Прогресс обновляется динамически, пока основной поток обрабатывает данные.
 
 ---
 
-### 6. **Почему это решение хорошее?**
-- **Минимализм**: Простая реализация с небольшим количеством кода.
-- **Гибкость**: Легко масштабируется для других задач (например, обработки больших данных или загрузки файлов).
-- **Динамичность**: Прогресс обновляется в одной строке без создания лишнего вывода.
-- **Повторное использование**: Класс `ProgressBar` можно использовать в других методах или проектах.
-
-Если у вас есть еще вопросы или это нужно доработать, дайте знать!
+Если это не работает, напишите, и я сделаю дополнительные исправления!
