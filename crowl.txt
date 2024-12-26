@@ -1,34 +1,33 @@
-Если прогресс-бар отображается только после завершения импорта, проблема кроется в следующем:
+Если предложенное решение снова не работает, давайте заново проверим и исправим:
 
-1. **Буферизация вывода консоли**: Вызов `System.out.print` откладывается до завершения долгой операции.
-2. **Метод `update()` вызывается, но консоль не обновляется немедленно**.
-
-Чтобы это исправить, я добавлю **принудительный вывод и flushing** консоли в каждой итерации, а также проверю, что вызов обновления прогресс-бара действительно происходит после каждого шага.
+1. **Проблема**: Основная задача блокирует обновление прогресс-бара. Это связано с тем, что метод `System.out.print` требует регулярного обновления через поток, но блокируется длительными операциями, такими как чтение и запись данных.
+2. **Решение**: Мы сделаем прогресс-бар **независимым потоком**, который обновляется на основе текущего состояния процесса импорта.
 
 ---
 
-### Обновленный прогресс-бар
+### Полный рабочий пример
 
-Теперь мы добавим **ручное управление потоками вывода** для реального времени.
+Код работает следующим образом:
+- Прогресс-бар обновляется в отдельном потоке.
+- Импорт данных обновляет прогресс в реальном времени.
+- После завершения задачи прогресс-бар завершает выполнение.
+
+#### Класс `ProgressBar`
 
 ```java
-import java.io.PrintStream;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ProgressBar {
-    private final int barLength;
     private final String taskName;
     private final int totalSteps;
+    private final int barLength;
     private final AtomicInteger currentStep = new AtomicInteger(0);
     private volatile boolean running = true;
 
-    private final PrintStream out;
-
-    public ProgressBar(String taskName, int totalSteps, int barLength, PrintStream out) {
+    public ProgressBar(String taskName, int totalSteps, int barLength) {
         this.taskName = taskName;
         this.totalSteps = totalSteps;
         this.barLength = barLength;
-        this.out = out;
     }
 
     public void start() {
@@ -36,13 +35,13 @@ public class ProgressBar {
             while (running) {
                 printProgress();
                 try {
-                    Thread.sleep(100);
+                    Thread.sleep(100); // Обновляем каждые 100 мс
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
             }
-            printProgress(); // Final progress update
-            out.println();   // Move to the next line
+            printProgress(); // Финальное обновление на 100%
+            System.out.println(); // Переход на новую строку после завершения
         });
         progressThread.setDaemon(true);
         progressThread.start();
@@ -62,7 +61,7 @@ public class ProgressBar {
         int percentage = (int) ((double) completedSteps / totalSteps * 100);
         int completedBars = (int) ((percentage / 100.0) * barLength);
 
-        StringBuilder progress = new StringBuilder("\r") // Return to start of line
+        StringBuilder progress = new StringBuilder("\r") // Возвращаемся в начало строки
                 .append(taskName)
                 .append(" [");
 
@@ -75,17 +74,17 @@ public class ProgressBar {
         }
 
         progress.append("] ").append(percentage).append("%");
-        out.print(progress.toString());
-        out.flush(); // Force flush to ensure real-time output
+        System.out.print(progress.toString());
+        System.out.flush(); // Гарантируем немедленный вывод
     }
 }
 ```
 
 ---
 
-### Интеграция в метод `importCsvToDatabaseBatch`
+#### Интеграция прогресс-бара в `importCsvToDatabaseBatch`
 
-Теперь интегрируем прогресс-бар, убедившись, что он обновляется при каждом выполнении батча:
+Теперь изменим метод импорта, чтобы он обновлял прогресс-бар по мере выполнения операций:
 
 ```java
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
@@ -94,7 +93,7 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
     // Создаем прогресс-бар
     ProgressBar progressBar = new ProgressBar(
-        "Импорт файла " + csvFilePath.getFileName(), totalSteps, 50, System.out);
+        "Импорт файла " + csvFilePath.getFileName(), totalSteps, 50);
     progressBar.start(); // Запускаем прогресс-бар
 
     try (Reader reader = Files.newBufferedReader(csvFilePath);
@@ -111,6 +110,7 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
             List<CSVRecord> records = csvParser.getRecords();
             int count = 0;
+            int stepsCompleted = 0;
 
             for (CSVRecord record : records) {
                 for (int i = 0; i < headers.size(); i++) {
@@ -126,61 +126,41 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
                         }
                     }
                 }
-
                 preparedStatement.addBatch();
                 count++;
 
                 if (count % BATCH_SIZE == 0) {
                     preparedStatement.executeBatch();
-
-                    // Обновляем прогресс-бар
-                    int completedSteps = count / BATCH_SIZE;
-                    progressBar.update(completedSteps);
+                    stepsCompleted++;
+                    progressBar.update(stepsCompleted); // Обновляем прогресс-бар
                 }
             }
-
-            preparedStatement.executeBatch(); // Выполнение оставшихся записей
+            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
             if (count % BATCH_SIZE != 0) {
-                int completedSteps = (int) Math.ceil((double) count / BATCH_SIZE);
-                progressBar.update(completedSteps);
+                stepsCompleted++;
+                progressBar.update(stepsCompleted); // Обновляем прогресс-бар
             }
         }
     } catch (Exception e) {
-        String message = "Ошибка при импорте файла " + csvFilePath.getFileName() + ": ";
-        log.error(message, e);
-        throw new Exception(message, e);
+        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
+        log.error(ExceptionFilter.unwindMessages(message, e));
+        description = ExceptionFilter.unwindMessages(message, e);
+        throw new Exception(message + e.getMessage(), e);
     } finally {
-        progressBar.complete(); // Завершаем прогресс-бар (100%)
+        progressBar.complete(); // Завершаем прогресс-бар
     }
-
     return true;
 }
 ```
 
 ---
 
-### Почему это должно работать
-1. **Принудительный вывод**:
-   - `out.flush()` гарантирует немедленный вывод в консоль.
+### Проверка
 
-2. **Асинхронный прогресс**:
-   - Прогресс-бар обновляется в отдельном потоке каждые 100 мс.
-   - Метод `progressBar.update(completedSteps)` обновляет состояние для текущего числа завершенных шагов.
-
-3. **Динамическое обновление**:
-   - Каждое обновление перерисовывает одну и ту же строку с использованием `\r`.
+1. Прогресс-бар должен запуститься сразу при начале импорта.
+2. Он будет обновляться по мере выполнения работы (в данном случае — по завершении каждого батча).
+3. После завершения всех операций прогресс-бар заполнится полностью и завершится.
 
 ---
 
-### Ожидаемый вывод в консоли
-
-Пример выполнения:
-
-```
-Импорт файла data.csv [██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 20%
-Импорт файла data.csv [███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 50%
-Импорт файла data.csv [███████████████████████░░░░░░░░░░░░░░░░░░░░░] 80%
-Импорт файла data.csv [█████████████████████████████████████████████] 100%
-```
-
-Если вывод всё ещё задерживается, возможно, проблема в том, как обрабатываются ваши данные (например, блокировка в `executeBatch()`). В таком случае потребуется больше подробностей о вашей среде и данных.
+Если это не решит проблему, то потребуется проверить окружение, в частности, **потоки ввода/вывода в консоль**, так как они могут быть перенаправлены или заблокированы.
