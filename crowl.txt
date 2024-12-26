@@ -1,66 +1,32 @@
-import me.tongfei.progressbar.ProgressBar;
-import me.tongfei.progressbar.ProgressBarStyle;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.TextColor;
+import com.googlecode.lanterna.graphics.TextGraphics;
 import com.googlecode.lanterna.screen.Screen;
 import com.googlecode.lanterna.screen.TerminalScreen;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
 import com.googlecode.lanterna.terminal.Terminal;
 
-public class CombinedProgressBarDemo {
+public class LanternaProgressBarDemo {
     public static void main(String[] args) throws Exception {
-        int totalSteps = 100;
+        Terminal terminal = new DefaultTerminalFactory().createTerminal();
+        Screen screen = new TerminalScreen(terminal);
 
-        // === 1. ConsoleProgressBar ===
-        System.out.println("=== ConsoleProgressBar ===");
-        try (ProgressBar pb = new ProgressBar("Processing", totalSteps, ProgressBarStyle.ASCII)) {
-            for (int i = 0; i <= totalSteps; i++) {
-                pb.step(); // Увеличиваем прогресс
-                Thread.sleep(20); // Имитация работы
+        try {
+            screen.startScreen();
+            screen.setCursorPosition(null); // Скрыть курсор
+
+            int total = 100;
+            TextGraphics graphics = screen.newTextGraphics();
+            for (int i = 0; i <= total; i++) {
+                String progressBar = "[" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "]";
+                graphics.setForegroundColor(TextColor.ANSI.GREEN);
+                graphics.putString(10, 5, "Progress: " + progressBar + " " + i + "%");
+                screen.refresh();
+                Thread.sleep(50); // Имитация работы
             }
+        } finally {
+            screen.stopScreen();
+            terminal.close();
         }
-
-        // === 2. JLine3 ProgressBar ===
-        System.out.println("\n=== JLine3 ProgressBar ===");
-        Terminal terminal = TerminalBuilder.terminal();
-        String[] spinner = {"|", "/", "-", "\\"}; // Анимация спиннера
-        for (int i = 0; i <= totalSteps; i++) {
-            int progress = (int) ((i / (double) totalSteps) * 100);
-            String animation = spinner[i % spinner.length];
-            terminal.writer().print("\rProgress: [" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "] " + progress + "% " + animation);
-            terminal.flush();
-            Thread.sleep(20); // Имитация работы
-        }
-        terminal.writer().println("\nDone!");
-
-        // === 3. Lanterna ProgressBar ===
-        System.out.println("\n=== Lanterna ProgressBar ===");
-        Terminal lanternaTerminal = new DefaultTerminalFactory().createTerminal();
-        Screen screen = new TerminalScreen(lanternaTerminal);
-        screen.startScreen();
-        screen.setCursorPosition(null); // Скрыть курсор
-
-        for (int i = 0; i <= totalSteps; i++) {
-            String progressBar = "[" + "=".repeat(i / 2) + " ".repeat(50 - i / 2) + "]";
-            screen.clear();
-            screen.newTextGraphics().setForegroundColor(TextColor.ANSI.CYAN)
-                                    .putString(10, 5, "Progress: " + progressBar + " " + i + "%");
-            screen.refresh();
-            Thread.sleep(20); // Имитация работы
-        }
-        screen.stopScreen();
-
-        // === 4. Custom ProgressBar ===
-        System.out.println("\n=== Custom ProgressBar ===");
-        for (int i = 0; i <= totalSteps; i++) {
-            int progress = (int) ((i / (double) totalSteps) * 100);
-            String bar = "[" + "=".repeat(progress / 2) + " ".repeat(50 - progress / 2) + "]";
-            String animation = spinner[i % spinner.length];
-            System.out.print("\rProgress: " + bar + " " + progress + "% " + animation);
-            Thread.sleep(20); // Имитация работы
-        }
-        System.out.println("\nDone!");
     }
 }
