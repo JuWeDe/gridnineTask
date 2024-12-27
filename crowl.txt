@@ -80,3 +80,77 @@ public class ProgressBarService {
         }
     }
 }
+
+
+
+
+
+
+private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
+    long totalRecords = fileIteration.getRows(); // Общее количество записей
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество шагов прогресса = батчи
+
+    // Инициализация прогресса
+    progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
+
+    try (Reader reader = Files.newBufferedReader(csvFilePath);
+         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
+
+        List<String> headers = csvParser.getHeaderNames().stream()
+                .flatMap(header -> splitHeader(header.trim()))
+                .map(header -> "\"" + header.trim() + "\"")
+                .collect(Collectors.toList());
+        headers.add("\"iteration_id\"");
+        String insertSQL = generateInsertSQL(tableName, headers);
+        int iteration_id = getIterationId(csvFilePath);
+
+        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
+            List<CSVRecord> records = csvParser.getRecords();
+            int count = 0; // Количество обработанных записей
+
+            for (CSVRecord record : records) {
+                for (int i = 0; i < headers.size(); i++) {
+                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
+
+                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
+                        description = "Пропуск данных";
+                        return false;
+                    } else {
+                        if (i == headers.size() - 1) {
+                            preparedStatement.setInt(i + 1, iteration_id);
+                        } else {
+                            preparedStatement.setString(i + 1, value);
+                        }
+                    }
+                }
+
+                preparedStatement.addBatch();
+                count++;
+
+                // Выполняем batch и обновляем прогресс
+                if (count % BATCH_SIZE == 0) {
+                    preparedStatement.executeBatch();
+                    progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем прогресс
+                }
+            }
+
+            // Выполняем оставшиеся записи
+            preparedStatement.executeBatch();
+            if (count % BATCH_SIZE != 0) {
+                progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем прогресс
+            }
+        }
+    } catch (Exception e) {
+        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в БД -> ";
+        log.error(ExceptionFilter.unwindMessages(message, e));
+        description = ExceptionFilter.unwindMessages(message, e);
+        throw new Exception(message + e.getMessage(), e);
+    } finally {
+        // Завершаем прогресс
+        progressBarService.completeProgress(csvFilePath.getFileName().toString());
+    }
+
+    return true;
+}
+
+
