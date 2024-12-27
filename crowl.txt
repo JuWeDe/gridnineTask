@@ -1,94 +1,7 @@
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
-@Service
-public class ProgressBarService {
-
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
-    }
-
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-        }
-    }
-
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
-    }
-
-    private static class ProgressBar {
-        private final int totalSteps;
-        private final String fileName;
-        private int completedSteps;
-        private int lastLoggedPercentage = -1; // Последний залогированный процент
-
-        public ProgressBar(int totalSteps, String fileName) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-            System.out.println(); // Закрываем строку после завершения.
-        }
-
-        private void printProgress() {
-            int percentage = calculatePercentage();
-
-            // Обновляем только при изменении процента
-            if (percentage != lastLoggedPercentage) {
-                lastLoggedPercentage = percentage;
-
-                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
-                StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 50; i++) {
-                    if (i < progressBars) {
-                        progressBar.append("█");
-                    } else {
-                        progressBar.append("░");
-                    }
-                }
-                progressBar.append("] ").append(percentage).append("%");
-
-                log.info("Прогресс импорта файла {}: {}", fileName, progressBar);
-            }
-        }
-
-        private int calculatePercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
-        }
-    }
-}
-
-
-
-
-
-
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
     long totalRecords = fileIteration.getRows(); // Общее количество записей
     int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество шагов прогресса = батчи
+    boolean success = false; // Флаг успеха импорта
 
     // Инициализация прогресса
     progressBarService.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
@@ -139,6 +52,9 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
             if (count % BATCH_SIZE != 0) {
                 progressBarService.updateProgress(csvFilePath.getFileName().toString(), 1); // Обновляем прогресс
             }
+
+            // Успешное завершение импорта
+            success = true;
         }
     } catch (Exception e) {
         String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в БД -> ";
@@ -146,11 +62,13 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         description = ExceptionFilter.unwindMessages(message, e);
         throw new Exception(message + e.getMessage(), e);
     } finally {
-        // Завершаем прогресс
-        progressBarService.completeProgress(csvFilePath.getFileName().toString());
+        // Завершаем прогресс только в случае успеха
+        if (success) {
+            progressBarService.completeProgress(csvFilePath.getFileName().toString());
+        } else {
+            log.info("Импорт файла {} был прерван.", csvFilePath.getFileName());
+        }
     }
 
-    return true;
+    return success;
 }
-
-
