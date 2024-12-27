@@ -1,166 +1,82 @@
-Если предложенное решение снова не работает, давайте заново проверим и исправим:
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 
-1. **Проблема**: Основная задача блокирует обновление прогресс-бара. Это связано с тем, что метод `System.out.print` требует регулярного обновления через поток, но блокируется длительными операциями, такими как чтение и запись данных.
-2. **Решение**: Мы сделаем прогресс-бар **независимым потоком**, который обновляется на основе текущего состояния процесса импорта.
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
----
+@Slf4j
+@Service
+public class ProgressBarService {
 
-### Полный рабочий пример
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
-Код работает следующим образом:
-- Прогресс-бар обновляется в отдельном потоке.
-- Импорт данных обновляет прогресс в реальном времени.
-- После завершения задачи прогресс-бар завершает выполнение.
-
-#### Класс `ProgressBar`
-
-```java
-import java.util.concurrent.atomic.AtomicInteger;
-
-public class ProgressBar {
-    private final String taskName;
-    private final int totalSteps;
-    private final int barLength;
-    private final AtomicInteger currentStep = new AtomicInteger(0);
-    private volatile boolean running = true;
-
-    public ProgressBar(String taskName, int totalSteps, int barLength) {
-        this.taskName = taskName;
-        this.totalSteps = totalSteps;
-        this.barLength = barLength;
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
     }
 
-    public void start() {
-        Thread progressThread = new Thread(() -> {
-            while (running) {
-                printProgress();
-                try {
-                    Thread.sleep(100); // Обновляем каждые 100 мс
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            printProgress(); // Финальное обновление на 100%
-            System.out.println(); // Переход на новую строку после завершения
-        });
-        progressThread.setDaemon(true);
-        progressThread.start();
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.update(stepsCompleted);
+        }
     }
 
-    public void update(int completedSteps) {
-        currentStep.set(completedSteps);
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+        }
+        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
     }
 
-    public void complete() {
-        currentStep.set(totalSteps);
-        running = false;
-    }
+    private static class ProgressBar {
+        private final int totalSteps;
+        private final String fileName;
+        private int completedSteps;
+        private int lastLoggedPercentage = -1; // Последний залогированный процент
 
-    private void printProgress() {
-        int completedSteps = currentStep.get();
-        int percentage = (int) ((double) completedSteps / totalSteps * 100);
-        int completedBars = (int) ((percentage / 100.0) * barLength);
-
-        StringBuilder progress = new StringBuilder("\r") // Возвращаемся в начало строки
-                .append(taskName)
-                .append(" [");
-
-        for (int i = 0; i < barLength; i++) {
-            if (i < completedBars) {
-                progress.append("█");
-            } else {
-                progress.append("░");
-            }
+        public ProgressBar(int totalSteps, String fileName) {
+            this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.completedSteps = 0;
         }
 
-        progress.append("] ").append(percentage).append("%");
-        System.out.print(progress.toString());
-        System.out.flush(); // Гарантируем немедленный вывод
-    }
-}
-```
+        public synchronized void update(int steps) {
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
+            printProgress();
+        }
 
----
+        public synchronized void complete() {
+            completedSteps = totalSteps;
+            printProgress();
+            System.out.println(); // Закрываем строку после завершения.
+        }
 
-#### Интеграция прогресс-бара в `importCsvToDatabaseBatch`
+        private void printProgress() {
+            int percentage = calculatePercentage();
 
-Теперь изменим метод импорта, чтобы он обновлял прогресс-бар по мере выполнения операций:
+            // Обновляем только при изменении процента
+            if (percentage != lastLoggedPercentage) {
+                lastLoggedPercentage = percentage;
 
-```java
-private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
-    long totalRecords = fileIteration.getRows(); // Общее количество записей
-    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Количество шагов = количество батчей
-
-    // Создаем прогресс-бар
-    ProgressBar progressBar = new ProgressBar(
-        "Импорт файла " + csvFilePath.getFileName(), totalSteps, 50);
-    progressBar.start(); // Запускаем прогресс-бар
-
-    try (Reader reader = Files.newBufferedReader(csvFilePath);
-         CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-
-        List<String> headers = csvParser.getHeaderNames().stream()
-                .flatMap(header -> splitHeader(header.trim()))
-                .map(header -> "\"" + header.trim() + "\"")
-                .collect(Collectors.toList());
-        headers.add("\"iteration_id\"");
-        String insertSQL = generateInsertSQL(tableName, headers);
-        int iteration_id = getIterationId(csvFilePath);
-
-        try (PreparedStatement preparedStatement = connection.prepareStatement(insertSQL)) {
-            List<CSVRecord> records = csvParser.getRecords();
-            int count = 0;
-            int stepsCompleted = 0;
-
-            for (CSVRecord record : records) {
-                for (int i = 0; i < headers.size(); i++) {
-                    String value = i == headers.size() - 1 ? String.valueOf(iteration_id) : record.get(i);
-                    if (!getIgnoreGaps().equals("active") && (value == null || value.trim().isEmpty())) {
-                        description = "Пропуск данных";
-                        return false;
+                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+                StringBuilder progressBar = new StringBuilder("[");
+                for (int i = 0; i < 50; i++) {
+                    if (i < progressBars) {
+                        progressBar.append("█");
                     } else {
-                        if (i == headers.size() - 1) {
-                            preparedStatement.setInt(i + 1, iteration_id);
-                        } else {
-                            preparedStatement.setString(i + 1, value);
-                        }
+                        progressBar.append("░");
                     }
                 }
-                preparedStatement.addBatch();
-                count++;
+                progressBar.append("] ").append(percentage).append("%");
 
-                if (count % BATCH_SIZE == 0) {
-                    preparedStatement.executeBatch();
-                    stepsCompleted++;
-                    progressBar.update(stepsCompleted); // Обновляем прогресс-бар
-                }
-            }
-            preparedStatement.executeBatch(); // Выполняем оставшиеся записи
-            if (count % BATCH_SIZE != 0) {
-                stepsCompleted++;
-                progressBar.update(stepsCompleted); // Обновляем прогресс-бар
+                log.info("Прогресс импорта файла {}: {}", fileName, progressBar);
             }
         }
-    } catch (Exception e) {
-        String message = "importCsvToDatabaseBatch: Ошибка при batch вставке данных в бд -> ";
-        log.error(ExceptionFilter.unwindMessages(message, e));
-        description = ExceptionFilter.unwindMessages(message, e);
-        throw new Exception(message + e.getMessage(), e);
-    } finally {
-        progressBar.complete(); // Завершаем прогресс-бар
+
+        private int calculatePercentage() {
+            return (int) ((double) completedSteps / totalSteps * 100);
+        }
     }
-    return true;
 }
-```
-
----
-
-### Проверка
-
-1. Прогресс-бар должен запуститься сразу при начале импорта.
-2. Он будет обновляться по мере выполнения работы (в данном случае — по завершении каждого батча).
-3. После завершения всех операций прогресс-бар заполнится полностью и завершится.
-
----
-
-Если это не решит проблему, то потребуется проверить окружение, в частности, **потоки ввода/вывода в консоль**, так как они могут быть перенаправлены или заблокированы.
