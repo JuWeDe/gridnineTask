@@ -1,14 +1,102 @@
-Вот версия с использованием библиотеки **`com.github.tongfei:progressbar`**. Этот вариант интегрируем в общую систему смены реализаций, как одну из опций. 
+Вот полный код с учетом всех изменений и включением всех прогресс-баров, REST-контроллера, интерфейса и реализации. 
 
 ---
 
-### 1. **Реализация `TongfeiProgressBarService`**
+### 1. **Интерфейс ProgressBarInterface**
+
+```java
+public interface ProgressBarInterface {
+    void startProgress(String fileName, long totalRecords, int batchSize);
+    void updateProgress(String fileName, int stepsCompleted);
+    void completeProgress(String fileName);
+}
+```
+
+---
+
+### 2. **SimpleProgressBarService**
+
+```java
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Slf4j
+@Service("simpleProgressBar")
+public class SimpleProgressBarService implements ProgressBarInterface {
+
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
+
+    @Override
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
+    }
+
+    @Override
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.update(stepsCompleted);
+        }
+    }
+
+    @Override
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+        }
+        progressBars.remove(fileName);
+    }
+
+    private static class ProgressBar {
+        private final int totalSteps;
+        private final String fileName;
+        private int completedSteps;
+        private int lastLoggedPercentage = -1;
+
+        public ProgressBar(int totalSteps, String fileName) {
+            this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.completedSteps = 0;
+        }
+
+        public synchronized void update(int steps) {
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
+            printProgress();
+        }
+
+        public synchronized void complete() {
+            completedSteps = totalSteps;
+            printProgress();
+        }
+
+        private void printProgress() {
+            int percentage = (int) ((double) completedSteps / totalSteps * 100);
+            if (percentage != lastLoggedPercentage) {
+                lastLoggedPercentage = percentage;
+                log.info("Прогресс импорта файла {}: {}%", fileName, percentage);
+            }
+        }
+    }
+}
+```
+
+---
+
+### 3. **TongfeiProgressBarService**
 
 ```java
 import me.tongfei.progressbar.ProgressBar;
 import me.tongfei.progressbar.ProgressBarBuilder;
 import me.tongfei.progressbar.ProgressBarStyle;
 import org.springframework.stereotype.Service;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service("tongfeiProgressBar")
 public class TongfeiProgressBarService implements ProgressBarInterface {
@@ -17,14 +105,12 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
 
     @Override
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
-
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
         ProgressBar progressBar = new ProgressBarBuilder()
                 .setTaskName("Импорт " + fileName)
                 .setStyle(ProgressBarStyle.ASCII)
                 .setInitialMax(totalSteps)
                 .build();
-
         progressBars.put(fileName, progressBar);
     }
 
@@ -50,40 +136,112 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
 
 ---
 
-### 2. **Интеграция в систему**
-
-#### Обновление `ProgressBarController`
-
-Добавляем поддержку `TongfeiProgressBarService` в REST-контроллер.
+### 4. **DynamicDotsProgressBarService**
 
 ```java
-@PostMapping("/set")
-public String setProgressBarImplementation(@RequestParam String implementation) {
-    switch (implementation.toLowerCase()) {
-        case "simple":
-            progressBarManager.setProgressBarImplementation(progressBarService);
-            break;
-        case "animated":
-            progressBarManager.setProgressBarImplementation(animatedProgressBarService);
-            break;
-        case "dynamicdots":
-            progressBarManager.setProgressBarImplementation(dynamicDotsProgressBarService);
-            break;
-        case "tongfei":
-            progressBarManager.setProgressBarImplementation(tongfeiProgressBarService);
-            break;
-        default:
-            return "Invalid implementation name. Choose from: 'simple', 'animated', 'dynamicdots', 'tongfei'.";
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+@Slf4j
+@Service("dynamicDotsProgressBar")
+public class DynamicDotsProgressBarService implements ProgressBarInterface {
+
+    private final Map<String, Integer> progressBars = new ConcurrentHashMap<>();
+
+    @Override
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        progressBars.put(fileName, 0);
     }
-    return "Progress bar implementation changed to: " + implementation;
+
+    @Override
+    public void updateProgress(String fileName, int stepsCompleted) {
+        int progress = progressBars.getOrDefault(fileName, 0);
+        progressBars.put(fileName, stepsCompleted);
+        StringBuilder dots = new StringBuilder();
+        for (int i = 0; i < stepsCompleted % 10; i++) {
+            dots.append(".");
+        }
+        log.info("Импорт файла {}: {}", fileName, dots);
+    }
+
+    @Override
+    public void completeProgress(String fileName) {
+        log.info("Импорт файла {} завершён.", fileName);
+        progressBars.remove(fileName);
+    }
 }
 ```
 
 ---
 
-### 3. **Пример использования в `importCsvToDatabaseBatch`**
+### 5. **ProgressBarManager**
 
-Интеграция использования `TongfeiProgressBarService` (или другой текущей реализации) в ваш метод импорта:
+```java
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ProgressBarManager {
+
+    private ProgressBarInterface progressBarImplementation;
+
+    public ProgressBarManager(@Qualifier("simpleProgressBar") ProgressBarInterface progressBarImplementation) {
+        this.progressBarImplementation = progressBarImplementation;
+    }
+
+    public void setProgressBarImplementation(ProgressBarInterface progressBarImplementation) {
+        this.progressBarImplementation = progressBarImplementation;
+    }
+
+    public ProgressBarInterface getProgressBarImplementation() {
+        return progressBarImplementation;
+    }
+}
+```
+
+---
+
+### 6. **REST Контроллер**
+
+```java
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/progress-bar")
+public class ProgressBarController {
+
+    @Autowired
+    private ProgressBarManager progressBarManager;
+
+    @PostMapping("/set")
+    public String setProgressBarImplementation(@RequestParam String implementation) {
+        switch (implementation.toLowerCase()) {
+            case "simple":
+                progressBarManager.setProgressBarImplementation(new SimpleProgressBarService());
+                break;
+            case "tongfei":
+                progressBarManager.setProgressBarImplementation(new TongfeiProgressBarService());
+                break;
+            case "dynamicdots":
+                progressBarManager.setProgressBarImplementation(new DynamicDotsProgressBarService());
+                break;
+            default:
+                return "Invalid implementation. Choose: simple, tongfei, dynamicdots.";
+        }
+        return "Implementation set to " + implementation;
+    }
+
+    @GetMapping("/current")
+    public String getCurrentImplementation() {
+        return "Current implementation: " + progressBarManager.getProgressBarImplementation().getClass().getSimpleName();
+    }
+}
+```
+
+---
+
+### 7. **Интеграция с `importCsvToDatabaseBatch`**
 
 ```java
 @Autowired
@@ -92,8 +250,8 @@ private ProgressBarManager progressBarManager;
 private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Connection connection, char delimiter) throws Exception {
     ProgressBarInterface progressBar = progressBarManager.getProgressBarImplementation();
 
-    long totalRecords = fileIteration.getRows(); // Вычисляем количество записей
-    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE); // Шаги прогресса = батчи
+    long totalRecords = fileIteration.getRows();
+    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE);
 
     progressBar.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
 
@@ -103,7 +261,7 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
         int stepsCompleted = 0;
 
         for (int i = 0; i < records.size(); i++) {
-            // Логика обработки и добавления батчей
+            // Логика обработки
             if (i % BATCH_SIZE == 0) {
                 stepsCompleted++;
                 progressBar.updateProgress(csvFilePath.getFileName().toString(), stepsCompleted);
@@ -120,29 +278,8 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
 ---
 
-### 4. **Запуск приложения**
+### Теперь у вас:
 
-Теперь доступен прогресс-бар от `tongfei` через REST API:
-
-#### Смена реализации:
-```http
-POST /progress-bar/set?implementation=tongfei
-```
-
-#### Проверка текущей реализации:
-```http
-GET /progress-bar/current
-```
-
----
-
-### 5. **Ключевые особенности реализации**
-
-- **Легкость интеграции:** `tongfei` прост в использовании и сразу предоставляет ASCII-стиль для терминала.
-- **Удобный API:** `ProgressBarBuilder` позволяет гибко настроить стиль и параметры.
-- **Смена реализаций:** Реализация переключается без перезапуска приложения через REST API.
-  
-Теперь у вас есть три уникальных подхода:  
-1. **Классический логируемый прогресс-бар.**  
-2. **Анимация (на основе `DynamicDots` или ASCII).**  
-3. **Интеграция с библиотекой `tongfei`.**
+1. Три разные реализации прогресс-баров.  
+2. REST API для смены реализаций без перезапуска приложения.  
+3. Легко расширяемая структура для добавления новых прогресс-баров.
