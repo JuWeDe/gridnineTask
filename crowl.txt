@@ -1,117 +1,89 @@
-Для изменения реализаций прогресс-бара через REST, нужно сделать следующее:
+Вот версия с использованием библиотеки **`com.github.tongfei:progressbar`**. Этот вариант интегрируем в общую систему смены реализаций, как одну из опций. 
 
 ---
 
-### 1. **Создать общий интерфейс `ProgressBarInterface`**
-
-Все реализации прогресс-бара должны реализовывать общий интерфейс. Вот пример интерфейса:
+### 1. **Реализация `TongfeiProgressBarService`**
 
 ```java
-public interface ProgressBarInterface {
-    void startProgress(String fileName, long totalRecords, int batchSize);
-    void updateProgress(String fileName, int stepsCompleted, long totalSteps);
-    void completeProgress(String fileName);
-}
-```
-
----
-
-### 2. **Реализации прогресс-баров**
-Каждый прогресс-бар должен реализовать интерфейс `ProgressBarInterface`. У тебя уже есть три варианта:
-1. **ProgressBarService** (с использованием библиотеки `tongfei.ProgressBar`).
-2. **AnimatedProgressBarService**.
-3. **DynamicDotsProgressBarService**.
-
----
-
-### 3. **Сделать сервис-обёртку для текущей реализации**
-
-Сервис-обёртка будет хранить текущую реализацию прогресс-бара, которую можно динамически менять.
-
-```java
+import me.tongfei.progressbar.ProgressBar;
+import me.tongfei.progressbar.ProgressBarBuilder;
+import me.tongfei.progressbar.ProgressBarStyle;
 import org.springframework.stereotype.Service;
 
-@Service
-public class ProgressBarManager {
+@Service("tongfeiProgressBar")
+public class TongfeiProgressBarService implements ProgressBarInterface {
 
-    private ProgressBarInterface progressBarImplementation;
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
-    public ProgressBarManager(ProgressBarInterface defaultImplementation) {
-        this.progressBarImplementation = defaultImplementation;
+    @Override
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
+
+        ProgressBar progressBar = new ProgressBarBuilder()
+                .setTaskName("Импорт " + fileName)
+                .setStyle(ProgressBarStyle.ASCII)
+                .setInitialMax(totalSteps)
+                .build();
+
+        progressBars.put(fileName, progressBar);
     }
 
-    public void setProgressBarImplementation(ProgressBarInterface progressBarImplementation) {
-        this.progressBarImplementation = progressBarImplementation;
+    @Override
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.stepTo(stepsCompleted);
+        }
     }
 
-    public ProgressBarInterface getProgressBarImplementation() {
-        return this.progressBarImplementation;
+    @Override
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.stepTo(progressBar.getMax());
+            progressBar.close();
+        }
+        progressBars.remove(fileName);
     }
 }
 ```
 
 ---
 
-### 4. **Контроллер для смены реализации**
+### 2. **Интеграция в систему**
 
-Контроллер позволит менять реализацию через REST-запрос. 
+#### Обновление `ProgressBarController`
+
+Добавляем поддержку `TongfeiProgressBarService` в REST-контроллер.
 
 ```java
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/progress-bar")
-public class ProgressBarController {
-
-    private final ProgressBarManager progressBarManager;
-    private final ProgressBarInterface progressBarService;
-    private final ProgressBarInterface animatedProgressBarService;
-    private final ProgressBarInterface dynamicDotsProgressBarService;
-
-    @Autowired
-    public ProgressBarController(
-            ProgressBarManager progressBarManager,
-            ProgressBarService progressBarService,
-            AnimatedProgressBarService animatedProgressBarService,
-            DynamicDotsProgressBarService dynamicDotsProgressBarService) {
-        this.progressBarManager = progressBarManager;
-        this.progressBarService = progressBarService;
-        this.animatedProgressBarService = animatedProgressBarService;
-        this.dynamicDotsProgressBarService = dynamicDotsProgressBarService;
+@PostMapping("/set")
+public String setProgressBarImplementation(@RequestParam String implementation) {
+    switch (implementation.toLowerCase()) {
+        case "simple":
+            progressBarManager.setProgressBarImplementation(progressBarService);
+            break;
+        case "animated":
+            progressBarManager.setProgressBarImplementation(animatedProgressBarService);
+            break;
+        case "dynamicdots":
+            progressBarManager.setProgressBarImplementation(dynamicDotsProgressBarService);
+            break;
+        case "tongfei":
+            progressBarManager.setProgressBarImplementation(tongfeiProgressBarService);
+            break;
+        default:
+            return "Invalid implementation name. Choose from: 'simple', 'animated', 'dynamicdots', 'tongfei'.";
     }
-
-    @PostMapping("/set")
-    public String setProgressBarImplementation(@RequestParam String implementation) {
-        switch (implementation.toLowerCase()) {
-            case "tongfei":
-                progressBarManager.setProgressBarImplementation(progressBarService);
-                break;
-            case "animated":
-                progressBarManager.setProgressBarImplementation(animatedProgressBarService);
-                break;
-            case "dynamicdots":
-                progressBarManager.setProgressBarImplementation(dynamicDotsProgressBarService);
-                break;
-            default:
-                return "Invalid implementation name. Choose from: 'tongfei', 'animated', 'dynamicdots'.";
-        }
-        return "Progress bar implementation changed to: " + implementation;
-    }
-
-    @GetMapping("/current")
-    public String getCurrentImplementation() {
-        return "Current progress bar implementation: " +
-                progressBarManager.getProgressBarImplementation().getClass().getSimpleName();
-    }
+    return "Progress bar implementation changed to: " + implementation;
 }
 ```
 
 ---
 
-### 5. **Интеграция с методом импорта**
+### 3. **Пример использования в `importCsvToDatabaseBatch`**
 
-В методе `importCsvToDatabaseBatch` используй текущую реализацию прогресс-бара из `ProgressBarManager`:
+Интеграция использования `TongfeiProgressBarService` (или другой текущей реализации) в ваш метод импорта:
 
 ```java
 @Autowired
@@ -134,13 +106,13 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
             // Логика обработки и добавления батчей
             if (i % BATCH_SIZE == 0) {
                 stepsCompleted++;
-                progressBar.updateProgress(csvFilePath.getFileName().toString(), stepsCompleted, totalSteps);
+                progressBar.updateProgress(csvFilePath.getFileName().toString(), stepsCompleted);
             }
         }
         progressBar.completeProgress(csvFilePath.getFileName().toString());
     } catch (Exception e) {
         progressBar.completeProgress(csvFilePath.getFileName().toString());
-        throw e; // Пробрасываем исключение дальше
+        throw e;
     }
     return true;
 }
@@ -148,13 +120,13 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
 ---
 
-### 6. **Примеры REST-запросов**
+### 4. **Запуск приложения**
+
+Теперь доступен прогресс-бар от `tongfei` через REST API:
 
 #### Смена реализации:
 ```http
 POST /progress-bar/set?implementation=tongfei
-POST /progress-bar/set?implementation=animated
-POST /progress-bar/set?implementation=dynamicdots
 ```
 
 #### Проверка текущей реализации:
@@ -164,14 +136,13 @@ GET /progress-bar/current
 
 ---
 
-### Что получилось:
-1. **Три разных реализации прогресс-бара**: каждая реализует `ProgressBarInterface`.
-2. **Смена прогресс-бара в реальном времени**: можно переключаться между реализациями без перезапуска приложения.
-3. **REST API**: позволяет интегрироваться с другими сервисами и легко тестировать.
+### 5. **Ключевые особенности реализации**
 
----
-
-### Плюсы решения:
-1. **Гибкость**: добавление новых реализаций требует только написания новой реализации `ProgressBarInterface`.
-2. **Удобство**: REST-эндпоинты позволяют тестировать и менять реализации без изменения кода.
-3. **Простота интеграции**: метод `importCsvToDatabaseBatch` остаётся неизменным, всё завязано на `ProgressBarManager`.
+- **Легкость интеграции:** `tongfei` прост в использовании и сразу предоставляет ASCII-стиль для терминала.
+- **Удобный API:** `ProgressBarBuilder` позволяет гибко настроить стиль и параметры.
+- **Смена реализаций:** Реализация переключается без перезапуска приложения через REST API.
+  
+Теперь у вас есть три уникальных подхода:  
+1. **Классический логируемый прогресс-бар.**  
+2. **Анимация (на основе `DynamicDots` или ASCII).**  
+3. **Интеграция с библиотекой `tongfei`.**
