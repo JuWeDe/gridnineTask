@@ -1,21 +1,28 @@
-Для интеграции вашей реализации прогресс-бара в существующий подход с бинами и REST API для выбора режимов, нужно выполнить следующие шаги:
+Хорошо, давайте я создам несколько уникальных реализаций прогресс-баров с креативным подходом, которые соответствуют следующим требованиям:  
 
----
-
-### Задачи:
-1. **Создать адаптацию вашего сервиса под интерфейс `ProgressBarInterface`.**
-2. **Добавить бин для вашей реализации, чтобы его можно было выбирать через REST API.**
-3. **Убедиться, что текущая реализация корректно переключается на вашу.**
+1. **Полоска прогресса с четкой границей.**  
+2. **Отображение процентов прогресса.**  
+3. **Отображение количества строк, которые обработаны.**  
+4. **Пять шагов (предположим, фиксированное количество сегментов).**  
+5. **Креативность в дизайне.**  
 
 ---
 
 ### Обновленный код:
 
+#### 1. **Интерфейс остается неизменным:**
+
+```java
+public interface ProgressBarInterface {
+    void startProgress(String fileName, long totalRecords, int batchSize);
+    void updateProgress(String fileName, int stepsCompleted);
+    void completeProgress(String fileName);
+}
+```
+
 ---
 
-#### 1. **Интеграция вашей реализации в `ProgressBarInterface`**
-
-Добавим реализацию вашей логики в сервис, который будет совместим с архитектурой.  
+#### 2. **Классическая ASCII реализация прогресс-бара**
 
 ```java
 import lombok.extern.slf4j.Slf4j;
@@ -25,15 +32,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
-@Service("customProgressBar")
-public class CustomProgressBarService implements ProgressBarInterface {
+@Service("asciiProgressBar")
+public class AsciiProgressBarService implements ProgressBarInterface {
 
     private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
     @Override
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
+        int totalSteps = 5; // Всегда 5 шагов
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
     }
 
     @Override
@@ -50,18 +57,22 @@ public class CustomProgressBarService implements ProgressBarInterface {
         if (progressBar != null) {
             progressBar.complete();
         }
-        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
+        progressBars.remove(fileName);
     }
 
     private static class ProgressBar {
         private final int totalSteps;
         private final String fileName;
+        private final long totalRecords;
+        private final int batchSize;
         private int completedSteps;
-        private int lastLoggedPercentage = -1; // Последний залогированный процент
+        private int lastLoggedPercentage = -1;
 
-        public ProgressBar(int totalSteps, String fileName) {
+        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
             this.totalSteps = totalSteps;
             this.fileName = fileName;
+            this.totalRecords = totalRecords;
+            this.batchSize = batchSize;
             this.completedSteps = 0;
         }
 
@@ -73,27 +84,27 @@ public class CustomProgressBarService implements ProgressBarInterface {
         public synchronized void complete() {
             completedSteps = totalSteps;
             printProgress();
-            System.out.println(); // Закрываем строку после завершения.
         }
 
         private void printProgress() {
             int percentage = calculatePercentage();
+            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
 
             if (percentage != lastLoggedPercentage) {
                 lastLoggedPercentage = percentage;
 
-                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+                int progressBars = (int) ((double) percentage / 20); // 5 шагов = 100%
                 StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 50; i++) {
+                for (int i = 0; i < 5; i++) {
                     if (i < progressBars) {
-                        progressBar.append("█");
+                        progressBar.append("=");
                     } else {
-                        progressBar.append("░");
+                        progressBar.append(" ");
                     }
                 }
-                progressBar.append("] ").append(percentage).append("%");
+                progressBar.append("] ").append(percentage).append("% (").append(recordsProcessed).append("/").append(totalRecords).append(")");
 
-                log.info("Импорт: {}", progressBar);
+                log.info("Импорт {}: {}", fileName, progressBar);
             }
         }
 
@@ -106,85 +117,94 @@ public class CustomProgressBarService implements ProgressBarInterface {
 
 ---
 
-#### 2. **Обновление `ProgressBarController`**
-
-Обеспечим возможность выбора вашей реализации через REST API.
+#### 3. **Реализация с использованием Unicode символов**
 
 ```java
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/progress-bar")
-public class ProgressBarController {
-
-    @Autowired
-    private ApplicationContext context;
-
-    @Autowired
-    private ProgressBarManager progressBarManager;
-
-    @PostMapping("/set")
-    public String setProgressBarImplementation(@RequestParam String implementation) {
-        try {
-            ProgressBarInterface bean = context.getBean(implementation + "ProgressBar", ProgressBarInterface.class);
-            progressBarManager.setProgressBarImplementation(bean);
-            return "Implementation set to " + implementation;
-        } catch (Exception e) {
-            return "Invalid implementation. Choose: simple, tongfei, dots, custom.";
-        }
-    }
-
-    @GetMapping("/current")
-    public String getCurrentImplementation() {
-        return "Current implementation: " + progressBarManager.getProgressBarImplementation().getClass().getSimpleName();
-    }
-}
-```
-
-Теперь реализация вашей логики доступна под именем `custom`. 
-
----
-
-#### 3. **Исправление TongfeiProgressBarService**
-
-Убираем стиль и фиксируем логику отображения прогресса по шагам.  
-
-```java
-import me.tongfei.progressbar.ProgressBar;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Service("tongfeiProgressBar")
-public class TongfeiProgressBarService implements ProgressBarInterface {
+@Slf4j
+@Service("unicodeProgressBar")
+public class UnicodeProgressBarService implements ProgressBarInterface {
 
     private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
     @Override
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
-        ProgressBar progressBar = new ProgressBar("Импорт " + fileName, totalSteps);
-        progressBars.put(fileName, progressBar);
+        int totalSteps = 5;
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
     }
 
     @Override
     public void updateProgress(String fileName, int stepsCompleted) {
         ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
-            progressBar.stepBy(stepsCompleted);
+            progressBar.update(stepsCompleted);
         }
     }
 
     @Override
     public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.remove(fileName);
+        ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
-            try (progressBar) {
-                progressBar.close();
+            progressBar.complete();
+        }
+        progressBars.remove(fileName);
+    }
+
+    private static class ProgressBar {
+        private final int totalSteps;
+        private final String fileName;
+        private final long totalRecords;
+        private final int batchSize;
+        private int completedSteps;
+        private int lastLoggedPercentage = -1;
+
+        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
+            this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.totalRecords = totalRecords;
+            this.batchSize = batchSize;
+            this.completedSteps = 0;
+        }
+
+        public synchronized void update(int steps) {
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
+            printProgress();
+        }
+
+        public synchronized void complete() {
+            completedSteps = totalSteps;
+            printProgress();
+        }
+
+        private void printProgress() {
+            int percentage = calculatePercentage();
+            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
+
+            if (percentage != lastLoggedPercentage) {
+                lastLoggedPercentage = percentage;
+
+                int progressBars = (int) ((double) percentage / 20);
+                StringBuilder progressBar = new StringBuilder("[");
+                for (int i = 0; i < 5; i++) {
+                    if (i < progressBars) {
+                        progressBar.append("⬛");
+                    } else {
+                        progressBar.append("⬜");
+                    }
+                }
+                progressBar.append("] ").append(percentage).append("% (").append(recordsProcessed).append("/").append(totalRecords).append(")");
+
+                log.info("Импорт {}: {}", fileName, progressBar);
             }
+        }
+
+        private int calculatePercentage() {
+            return (int) ((double) completedSteps / totalSteps * 100);
         }
     }
 }
@@ -192,10 +212,107 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
 
 ---
 
-### Итог:
+#### 4. **Реализация с отображением шага в скобках**
 
-1. **Добавлена ваша реализация (`CustomProgressBarService`) в виде Spring-бина.**  
-2. **REST API обновлено для работы с вашей реализацией (`custom`).**  
-3. **Исправлена логика `TongfeiProgressBarService` для корректного отображения прогресса по шагам.**  
+```java
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 
-Теперь вы можете переключаться между `custom`, `simple`, `tongfei`, `dots` через REST API.
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Slf4j
+@Service("stepProgressBar")
+public class StepProgressBarService implements ProgressBarInterface {
+
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
+
+    @Override
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        int totalSteps = 5;
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
+    }
+
+    @Override
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.update(stepsCompleted);
+        }
+    }
+
+    @Override
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+        }
+        progressBars.remove(fileName);
+    }
+
+    private static class ProgressBar {
+        private final int totalSteps;
+        private final String fileName;
+        private final long totalRecords;
+        private final int batchSize;
+        private int completedSteps;
+        private int lastLoggedPercentage = -1;
+
+        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
+            this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.totalRecords = totalRecords;
+            this.batchSize = batchSize;
+            this.completedSteps = 0;
+        }
+
+        public synchronized void update(int steps) {
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
+            printProgress();
+        }
+
+        public synchronized void complete() {
+            completedSteps = totalSteps;
+            printProgress();
+        }
+
+        private void printProgress() {
+            int percentage = calculatePercentage();
+            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
+
+            if (percentage != lastLoggedPercentage) {
+                lastLoggedPercentage = percentage;
+
+                int progressBars = (int) ((double) percentage / 20);
+                StringBuilder progressBar = new StringBuilder("[");
+                for (int i = 0; i < 5; i++) {
+                    if (i < progressBars) {
+                        progressBar.append("■");
+                    } else {
+                        progressBar.append("□");
+                    }
+                }
+                progressBar.append("] ").append(percentage).append("% (")
+                          .append(completedSteps).append("/").append(totalSteps)
+                          .append(" steps, ").append(recordsProcessed).append("/")
+                          .append(totalRecords).append(" rows)");
+
+                log.info("Импорт {}: {}", fileName, progressBar);
+            }
+        }
+
+        private int calculatePercentage() {
+            return (int) ((double) completedSteps / totalSteps * 100);
+        }
+    }
+}
+```
+
+---
+
+### Что получилось:
+1. **`AsciiProgressBarService`**: Классический ASCII стиль.  
+2. **`UnicodeProgressBarService`**: Использует красивые Unicode символы (⬛, ⬜).  
+3. **`StepProgressBarService`**: Показывает текущий шаг и прогресс строк.  
+
+Пожалуйста, посмотрите, какая из реализаций вам подходит больше, или дайте комментарии для улучшения.
