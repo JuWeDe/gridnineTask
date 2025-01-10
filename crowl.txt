@@ -1,4 +1,14 @@
-Вот полный код с учетом всех изменений и включением всех прогресс-баров, REST-контроллера, интерфейса и реализации. 
+Чтобы интегрировать возможность выбора разных реализаций прогресс-баров через REST API и сделать код более гибким, давайте реализуем следующую архитектуру:
+
+1. **Создаем интерфейс `ProgressBarInterface`** — это позволит абстрагироваться от конкретной реализации.
+2. **Реализуем несколько вариантов прогресс-баров: ваш текущий, `TongfeiProgressBarService`, и любую другую уникальную реализацию.**
+3. **Добавим `ProgressBarManager` для динамического управления реализациями.**
+4. **Внедрим REST-контроллер для выбора прогресс-бара во время выполнения.**
+5. **Интегрируем это в метод импорта `importCsvToDatabaseBatch`.**
+
+---
+
+### Полный код:
 
 ---
 
@@ -14,7 +24,7 @@ public interface ProgressBarInterface {
 
 ---
 
-### 2. **SimpleProgressBarService**
+### 2. **SimpleProgressBarService (ваш текущий прогресс-бар)**
 
 ```java
 import lombok.extern.slf4j.Slf4j;
@@ -136,15 +146,15 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
 
 ---
 
-### 4. **DynamicDotsProgressBarService**
+### 4. **DotsProgressBarService (альтернативная реализация)**
 
 ```java
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 @Slf4j
-@Service("dynamicDotsProgressBar")
-public class DynamicDotsProgressBarService implements ProgressBarInterface {
+@Service("dotsProgressBar")
+public class DotsProgressBarService implements ProgressBarInterface {
 
     private final Map<String, Integer> progressBars = new ConcurrentHashMap<>();
 
@@ -155,10 +165,10 @@ public class DynamicDotsProgressBarService implements ProgressBarInterface {
 
     @Override
     public void updateProgress(String fileName, int stepsCompleted) {
-        int progress = progressBars.getOrDefault(fileName, 0);
-        progressBars.put(fileName, stepsCompleted);
+        int progress = progressBars.getOrDefault(fileName, 0) + stepsCompleted;
+        progressBars.put(fileName, progress);
         StringBuilder dots = new StringBuilder();
-        for (int i = 0; i < stepsCompleted % 10; i++) {
+        for (int i = 0; i < progress % 10; i++) {
             dots.append(".");
         }
         log.info("Импорт файла {}: {}", fileName, dots);
@@ -223,11 +233,11 @@ public class ProgressBarController {
             case "tongfei":
                 progressBarManager.setProgressBarImplementation(new TongfeiProgressBarService());
                 break;
-            case "dynamicdots":
-                progressBarManager.setProgressBarImplementation(new DynamicDotsProgressBarService());
+            case "dots":
+                progressBarManager.setProgressBarImplementation(new DotsProgressBarService());
                 break;
             default:
-                return "Invalid implementation. Choose: simple, tongfei, dynamicdots.";
+                return "Invalid implementation. Choose: simple, tongfei, dots.";
         }
         return "Implementation set to " + implementation;
     }
@@ -241,7 +251,7 @@ public class ProgressBarController {
 
 ---
 
-### 7. **Интеграция с `importCsvToDatabaseBatch`**
+### 7. **Интеграция с importCsvToDatabaseBatch**
 
 ```java
 @Autowired
@@ -251,26 +261,21 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
     ProgressBarInterface progressBar = progressBarManager.getProgressBarImplementation();
 
     long totalRecords = fileIteration.getRows();
-    int totalSteps = (int) Math.ceil((double) totalRecords / BATCH_SIZE);
-
     progressBar.startProgress(csvFilePath.getFileName().toString(), totalRecords, BATCH_SIZE);
 
     try (Reader reader = Files.newBufferedReader(csvFilePath);
          CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withDelimiter(delimiter).withFirstRecordAsHeader())) {
-        List<CSVRecord> records = csvParser.getRecords();
-        int stepsCompleted = 0;
+        int count = 0;
 
-        for (int i = 0; i < records.size(); i++) {
-            // Логика обработки
-            if (i % BATCH_SIZE == 0) {
-                stepsCompleted++;
-                progressBar.updateProgress(csvFilePath.getFileName().toString(), stepsCompleted);
+        for (CSVRecord record : csvParser.getRecords()) {
+            // Обработка записей
+
+            count++;
+            if (count % BATCH_SIZE == 0) {
+                progressBar.updateProgress(csvFilePath.getFileName().toString(), 1);
             }
         }
         progressBar.completeProgress(csvFilePath.getFileName().toString());
-    } catch (Exception e) {
-        progressBar.completeProgress(csvFilePath.getFileName().toString());
-        throw e;
     }
     return true;
 }
@@ -278,8 +283,8 @@ private boolean importCsvToDatabaseBatch(Path csvFilePath, String tableName, Con
 
 ---
 
-### Теперь у вас:
-
-1. Три разные реализации прогресс-баров.  
-2. REST API для смены реализаций без перезапуска приложения.  
-3. Легко расширяемая структура для добавления новых прогресс-баров.
+### Пояснения:
+1. **Интерфейс `ProgressBarInterface`** позволяет легко добавлять новые реализации.
+2. REST API позволяет переключаться между реализациями на лету.
+3. Все реализации независимы и могут быть легко расширены или модифицированы.
+4. Прогресс-бар корректно интегрирован в метод импорта.
