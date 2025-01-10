@@ -1,30 +1,114 @@
-Это решение выглядит хорошо структурированным и позволяет гибко выбирать реализацию прогресс-бара. Однако есть несколько доработок и улучшений:
+Для интеграции вашей реализации прогресс-бара в существующий подход с бинами и REST API для выбора режимов, нужно выполнить следующие шаги:
 
 ---
 
-### Исправления и улучшения:
-
-1. **Использование `@Autowired` для внедрения зависимостей:**
-   В `ProgressBarController` вы вручную создаете объекты (`new SimpleProgressBarService()`, и т.д.), но в Spring рекомендуется использовать внедрение через контекст, чтобы избежать проблем с управлением зависимостями.
-
-2. **Обработка исключений для TongfeiProgressBar:**
-   Tongfei прогресс-бары необходимо использовать с `try-with-resources`, так как они требуют явного вызова `close()`.
-
-3. **Динамическая регистрация бинов с использованием контекста Spring:**
-   Вместо ручного определения в `ProgressBarController` можно извлекать реализации из контекста, чтобы избежать жесткого связывания кода.
-
-4. **Добавление новых реализаций:**
-   Можно добавить больше альтернативных прогресс-баров, например:
-   - Прогресс-бар с анимацией (например, вращающийся символ).
-   - Прогресс-бар с выводом ASCII-графики.
+### Задачи:
+1. **Создать адаптацию вашего сервиса под интерфейс `ProgressBarInterface`.**
+2. **Добавить бин для вашей реализации, чтобы его можно было выбирать через REST API.**
+3. **Убедиться, что текущая реализация корректно переключается на вашу.**
 
 ---
 
-### Исправленный код:
+### Обновленный код:
 
 ---
 
-#### 1. **Dynamic Progress Bar Switching in `ProgressBarController`**
+#### 1. **Интеграция вашей реализации в `ProgressBarInterface`**
+
+Добавим реализацию вашей логики в сервис, который будет совместим с архитектурой.  
+
+```java
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Slf4j
+@Service("customProgressBar")
+public class CustomProgressBarService implements ProgressBarInterface {
+
+    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
+
+    @Override
+    public void startProgress(String fileName, long totalRecords, int batchSize) {
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
+    }
+
+    @Override
+    public void updateProgress(String fileName, int stepsCompleted) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.update(stepsCompleted);
+        }
+    }
+
+    @Override
+    public void completeProgress(String fileName) {
+        ProgressBar progressBar = progressBars.get(fileName);
+        if (progressBar != null) {
+            progressBar.complete();
+        }
+        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
+    }
+
+    private static class ProgressBar {
+        private final int totalSteps;
+        private final String fileName;
+        private int completedSteps;
+        private int lastLoggedPercentage = -1; // Последний залогированный процент
+
+        public ProgressBar(int totalSteps, String fileName) {
+            this.totalSteps = totalSteps;
+            this.fileName = fileName;
+            this.completedSteps = 0;
+        }
+
+        public synchronized void update(int steps) {
+            completedSteps = Math.min(completedSteps + steps, totalSteps);
+            printProgress();
+        }
+
+        public synchronized void complete() {
+            completedSteps = totalSteps;
+            printProgress();
+            System.out.println(); // Закрываем строку после завершения.
+        }
+
+        private void printProgress() {
+            int percentage = calculatePercentage();
+
+            if (percentage != lastLoggedPercentage) {
+                lastLoggedPercentage = percentage;
+
+                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+                StringBuilder progressBar = new StringBuilder("[");
+                for (int i = 0; i < 50; i++) {
+                    if (i < progressBars) {
+                        progressBar.append("█");
+                    } else {
+                        progressBar.append("░");
+                    }
+                }
+                progressBar.append("] ").append(percentage).append("%");
+
+                log.info("Импорт: {}", progressBar);
+            }
+        }
+
+        private int calculatePercentage() {
+            return (int) ((double) completedSteps / totalSteps * 100);
+        }
+    }
+}
+```
+
+---
+
+#### 2. **Обновление `ProgressBarController`**
+
+Обеспечим возможность выбора вашей реализации через REST API.
 
 ```java
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,12 +127,13 @@ public class ProgressBarController {
 
     @PostMapping("/set")
     public String setProgressBarImplementation(@RequestParam String implementation) {
-        ProgressBarInterface bean = context.getBean(implementation + "ProgressBar", ProgressBarInterface.class);
-        if (bean == null) {
-            return "Invalid implementation. Choose: simple, tongfei, dots.";
+        try {
+            ProgressBarInterface bean = context.getBean(implementation + "ProgressBar", ProgressBarInterface.class);
+            progressBarManager.setProgressBarImplementation(bean);
+            return "Implementation set to " + implementation;
+        } catch (Exception e) {
+            return "Invalid implementation. Choose: simple, tongfei, dots, custom.";
         }
-        progressBarManager.setProgressBarImplementation(bean);
-        return "Implementation set to " + implementation;
     }
 
     @GetMapping("/current")
@@ -58,14 +143,16 @@ public class ProgressBarController {
 }
 ```
 
+Теперь реализация вашей логики доступна под именем `custom`. 
+
 ---
 
-#### 2. **Fix for TongfeiProgressBarService**
+#### 3. **Исправление TongfeiProgressBarService**
+
+Убираем стиль и фиксируем логику отображения прогресса по шагам.  
 
 ```java
 import me.tongfei.progressbar.ProgressBar;
-import me.tongfei.progressbar.ProgressBarBuilder;
-import me.tongfei.progressbar.ProgressBarStyle;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -79,11 +166,7 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
     @Override
     public void startProgress(String fileName, long totalRecords, int batchSize) {
         int totalSteps = (int) Math.ceil((double) totalRecords / batchSize);
-        ProgressBar progressBar = new ProgressBarBuilder()
-                .setTaskName("Импорт " + fileName)
-                .setStyle(ProgressBarStyle.ASCII)
-                .setInitialMax(totalSteps)
-                .build();
+        ProgressBar progressBar = new ProgressBar("Импорт " + fileName, totalSteps);
         progressBars.put(fileName, progressBar);
     }
 
@@ -91,7 +174,7 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
     public void updateProgress(String fileName, int stepsCompleted) {
         ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
-            progressBar.stepTo(stepsCompleted);
+            progressBar.stepBy(stepsCompleted);
         }
     }
 
@@ -100,7 +183,7 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
         ProgressBar progressBar = progressBars.remove(fileName);
         if (progressBar != null) {
             try (progressBar) {
-                progressBar.stepTo(progressBar.getMax());
+                progressBar.close();
             }
         }
     }
@@ -109,78 +192,10 @@ public class TongfeiProgressBarService implements ProgressBarInterface {
 
 ---
 
-#### 3. **New ASCII Animation ProgressBar**
+### Итог:
 
-```java
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
+1. **Добавлена ваша реализация (`CustomProgressBarService`) в виде Spring-бина.**  
+2. **REST API обновлено для работы с вашей реализацией (`custom`).**  
+3. **Исправлена логика `TongfeiProgressBarService` для корректного отображения прогресса по шагам.**  
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
-
-@Slf4j
-@Service("animatedProgressBar")
-public class AnimatedProgressBarService implements ProgressBarInterface {
-
-    private final Map<String, Integer> progressBars = new ConcurrentHashMap<>();
-    private final char[] animation = {'-', '\\', '|', '/'};
-
-    @Override
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        progressBars.put(fileName, 0);
-    }
-
-    @Override
-    public void updateProgress(String fileName, int stepsCompleted) {
-        int progress = progressBars.getOrDefault(fileName, 0) + stepsCompleted;
-        progressBars.put(fileName, progress);
-
-        char frame = animation[progress % animation.length];
-        log.info("Импорт файла {}: {}", fileName, frame);
-    }
-
-    @Override
-    public void completeProgress(String fileName) {
-        log.info("Импорт файла {} завершён.", fileName);
-        progressBars.remove(fileName);
-    }
-}
-```
-
----
-
-#### 4. **Updated `ProgressBarManager` to Validate Beans**
-
-```java
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.stereotype.Component;
-
-@Component
-public class ProgressBarManager {
-
-    private ProgressBarInterface progressBarImplementation;
-
-    public ProgressBarManager(@Qualifier("simpleProgressBar") ProgressBarInterface progressBarImplementation) {
-        this.progressBarImplementation = progressBarImplementation;
-    }
-
-    public void setProgressBarImplementation(ProgressBarInterface progressBarImplementation) {
-        this.progressBarImplementation = progressBarImplementation;
-    }
-
-    public ProgressBarInterface getProgressBarImplementation() {
-        return progressBarImplementation;
-    }
-}
-```
-
----
-
-### Вывод:
-
-Теперь добавлены:
-1. **Динамическое переключение через Spring Context:** Все реализации `ProgressBarInterface` извлекаются из контекста Spring по имени.
-2. **Исправление Tongfei с использованием `try-with-resources`:** Гарантируется корректное освобождение ресурсов.
-3. **Добавлен анимационный прогресс-бар.**
-
-Такая архитектура позволяет легко добавлять новые реализации прогресс-баров, выбирать их через API, и корректно управлять их ресурсами.
+Теперь вы можете переключаться между `custom`, `simple`, `tongfei`, `dots` через REST API.
