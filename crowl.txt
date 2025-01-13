@@ -55,10 +55,10 @@ public class ProgressBarService {
             if (shouldLogProgress(percentage)) {
                 lastLoggedPercentage = percentage;
 
-                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
+                int filledBars = (percentage / 20); // Всего 5 символов
                 StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 50; i++) {
-                    if (i < progressBars) {
+                for (int i = 0; i < 5; i++) {
+                    if (i < filledBars) {
                         progressBar.append("█");
                     } else {
                         progressBar.append("░");
