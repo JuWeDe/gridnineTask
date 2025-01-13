@@ -1,23 +1,14 @@
-
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 @Slf4j
-@Service("customProgressBar")
-public class CustomProgressBarService implements ProgressBarInterface {
+@Service
+public class ProgressBarService {
 
     private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
 
-    @Override
     public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = 4; // Всегда 4 этапа для отображения
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
+        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
+        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
     }
 
-    @Override
     public void updateProgress(String fileName, int stepsCompleted) {
         ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
@@ -25,28 +16,24 @@ public class CustomProgressBarService implements ProgressBarInterface {
         }
     }
 
-    @Override
     public void completeProgress(String fileName) {
         ProgressBar progressBar = progressBars.get(fileName);
         if (progressBar != null) {
             progressBar.complete();
         }
-        progressBars.remove(fileName);
+        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
     }
 
     private static class ProgressBar {
+        private static final int[] FIXED_PERCENTAGES = {20, 40, 60, 80, 100}; // Шаги прогресса
         private final int totalSteps;
         private final String fileName;
-        private final long totalRecords;
-        private final int batchSize;
         private int completedSteps;
-        private int lastLoggedPercentage = -1;
+        private int lastLoggedPercentage = -1; // Последний залогированный шаг
 
-        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
+        public ProgressBar(int totalSteps, String fileName) {
             this.totalSteps = totalSteps;
             this.fileName = fileName;
-            this.totalRecords = totalRecords;
-            this.batchSize = batchSize;
             this.completedSteps = 0;
         }
 
@@ -58,355 +45,43 @@ public class CustomProgressBarService implements ProgressBarInterface {
         public synchronized void complete() {
             completedSteps = totalSteps;
             printProgress();
+            System.out.println(); // Закрываем строку после завершения.
         }
 
         private void printProgress() {
             int percentage = calculatePercentage();
-            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
 
-            // Выводить прогресс только на 4 этапах (25%, 50%, 75%, 100%)
-            if (percentage != lastLoggedPercentage && percentage % 25 == 0) {
+            // Проверяем, прошли ли мы пороговый шаг (20%, 40%, ...).
+            if (shouldLogProgress(percentage)) {
                 lastLoggedPercentage = percentage;
 
-                int progressBars = completedSteps; // Каждая запись соответствует одному из 4 шагов
+                int progressBars = (int) ((double) percentage / 2); // 50 символов = 100%
                 StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < totalSteps; i++) {
+                for (int i = 0; i < 50; i++) {
                     if (i < progressBars) {
-                        progressBar.append("■");
+                        progressBar.append("█");
                     } else {
-                        progressBar.append("□");
+                        progressBar.append("░");
                     }
                 }
-                progressBar.append("] ").append(percentage).append("% (").append(recordsProcessed)
-                          .append("/").append(totalRecords).append(")");
+                progressBar.append("] ").append(percentage).append("%");
 
-                log.info("Импорт {}: {}", fileName, progressBar);
+                log.info("Импорт файла {}: {}", fileName, progressBar);
             }
         }
 
         private int calculatePercentage() {
             return (int) ((double) completedSteps / totalSteps * 100);
         }
-    }
-}
 
-
-
-Хорошо, давайте я создам несколько уникальных реализаций прогресс-баров с креативным подходом, которые соответствуют следующим требованиям:  
-
-1. **Полоска прогресса с четкой границей.**  
-2. **Отображение процентов прогресса.**  
-3. **Отображение количества строк, которые обработаны.**  
-4. **Пять шагов (предположим, фиксированное количество сегментов).**  
-5. **Креативность в дизайне.**  
-
----
-
-### Обновленный код:
-
-#### 1. **Интерфейс остается неизменным:**
-
-```java
-public interface ProgressBarInterface {
-    void startProgress(String fileName, long totalRecords, int batchSize);
-    void updateProgress(String fileName, int stepsCompleted);
-    void completeProgress(String fileName);
-}
-```
-
----
-
-#### 2. **Классическая ASCII реализация прогресс-бара**
-
-```java
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
-@Service("asciiProgressBar")
-public class AsciiProgressBarService implements ProgressBarInterface {
-
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    @Override
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = 5; // Всегда 5 шагов
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
-    }
-
-    @Override
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-        }
-    }
-
-    @Override
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName);
-    }
-
-    private static class ProgressBar {
-        private final int totalSteps;
-        private final String fileName;
-        private final long totalRecords;
-        private final int batchSize;
-        private int completedSteps;
-        private int lastLoggedPercentage = -1;
-
-        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.totalRecords = totalRecords;
-            this.batchSize = batchSize;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-        }
-
-        private void printProgress() {
-            int percentage = calculatePercentage();
-            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
-
-            if (percentage != lastLoggedPercentage) {
-                lastLoggedPercentage = percentage;
-
-                int progressBars = (int) ((double) percentage / 20); // 5 шагов = 100%
-                StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 5; i++) {
-                    if (i < progressBars) {
-                        progressBar.append("=");
-                    } else {
-                        progressBar.append(" ");
-                    }
+        private boolean shouldLogProgress(int percentage) {
+            // Логируем только на фиксированных уровнях (20%, 40%, 60%, ...).
+            for (int fixed : FIXED_PERCENTAGES) {
+                if (percentage >= fixed && lastLoggedPercentage < fixed) {
+                    return true;
                 }
-                progressBar.append("] ").append(percentage).append("% (").append(recordsProcessed).append("/").append(totalRecords).append(")");
-
-                log.info("Импорт {}: {}", fileName, progressBar);
             }
-        }
-
-        private int calculatePercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
+            return false;
         }
     }
 }
-```
-
----
-
-#### 3. **Реализация с использованием Unicode символов**
-
-```java
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
-@Service("unicodeProgressBar")
-public class UnicodeProgressBarService implements ProgressBarInterface {
-
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    @Override
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = 5;
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
-    }
-
-    @Override
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-        }
-    }
-
-    @Override
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName);
-    }
-
-    private static class ProgressBar {
-        private final int totalSteps;
-        private final String fileName;
-        private final long totalRecords;
-        private final int batchSize;
-        private int completedSteps;
-        private int lastLoggedPercentage = -1;
-
-        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.totalRecords = totalRecords;
-            this.batchSize = batchSize;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-        }
-
-        private void printProgress() {
-            int percentage = calculatePercentage();
-            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
-
-            if (percentage != lastLoggedPercentage) {
-                lastLoggedPercentage = percentage;
-
-                int progressBars = (int) ((double) percentage / 20);
-                StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 5; i++) {
-                    if (i < progressBars) {
-                        progressBar.append("⬛");
-                    } else {
-                        progressBar.append("⬜");
-                    }
-                }
-                progressBar.append("] ").append(percentage).append("% (").append(recordsProcessed).append("/").append(totalRecords).append(")");
-
-                log.info("Импорт {}: {}", fileName, progressBar);
-            }
-        }
-
-        private int calculatePercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
-        }
-    }
-}
-```
-
----
-
-#### 4. **Реализация с отображением шага в скобках**
-
-```java
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
-@Service("stepProgressBar")
-public class StepProgressBarService implements ProgressBarInterface {
-
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
-
-    @Override
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = 5;
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName, totalRecords, batchSize));
-    }
-
-    @Override
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-        }
-    }
-
-    @Override
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName);
-    }
-
-    private static class ProgressBar {
-        private final int totalSteps;
-        private final String fileName;
-        private final long totalRecords;
-        private final int batchSize;
-        private int completedSteps;
-        private int lastLoggedPercentage = -1;
-
-        public ProgressBar(int totalSteps, String fileName, long totalRecords, int batchSize) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.totalRecords = totalRecords;
-            this.batchSize = batchSize;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-        }
-
-        private void printProgress() {
-            int percentage = calculatePercentage();
-            long recordsProcessed = Math.min(batchSize * completedSteps, totalRecords);
-
-            if (percentage != lastLoggedPercentage) {
-                lastLoggedPercentage = percentage;
-
-                int progressBars = (int) ((double) percentage / 20);
-                StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 5; i++) {
-                    if (i < progressBars) {
-                        progressBar.append("■");
-                    } else {
-                        progressBar.append("□");
-                    }
-                }
-                progressBar.append("] ").append(percentage).append("% (")
-                          .append(completedSteps).append("/").append(totalSteps)
-                          .append(" steps, ").append(recordsProcessed).append("/")
-                          .append(totalRecords).append(" rows)");
-
-                log.info("Импорт {}: {}", fileName, progressBar);
-            }
-        }
-
-        private int calculatePercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
-        }
-    }
-}
-```
-
----
-
-### Что получилось:
-1. **`AsciiProgressBarService`**: Классический ASCII стиль.  
-2. **`UnicodeProgressBarService`**: Использует красивые Unicode символы (⬛, ⬜).  
-3. **`StepProgressBarService`**: Показывает текущий шаг и прогресс строк.  
-
-Пожалуйста, посмотрите, какая из реализаций вам подходит больше, или дайте комментарии для улучшения.
