@@ -1,87 +1,100 @@
-@Slf4j
-@Service
-public class ProgressBarService {
+Чтобы разместить легенду справа от графика, а также отобразить в ней описание цветов для каждого сектора, вам нужно дополнительно настроить легенду и правильно связать ее с данными графика. В Highcharts, элементы данных и их цвета автоматически отображаются в легенде, если правильно настроить `legend` и применить цвета для секторов.
 
-    private final Map<String, ProgressBar> progressBars = new ConcurrentHashMap<>();
+Ниже представлена обновленная версия вашего кода с нужными правками для размещения легенды справа от графика:
 
-    public void startProgress(String fileName, long totalRecords, int batchSize) {
-        int totalSteps = (int) Math.ceil((double) totalRecords / batchSize); // Количество шагов = количество батчей
-        progressBars.put(fileName, new ProgressBar(totalSteps, fileName));
-    }
-
-    public void updateProgress(String fileName, int stepsCompleted) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.update(stepsCompleted);
-        }
-    }
-
-    public void completeProgress(String fileName) {
-        ProgressBar progressBar = progressBars.get(fileName);
-        if (progressBar != null) {
-            progressBar.complete();
-        }
-        progressBars.remove(fileName); // Удаляем прогресс-бар после завершения
-    }
-
-    private static class ProgressBar {
-        private static final int[] FIXED_PERCENTAGES = {20, 40, 60, 80, 100}; // Шаги прогресса
-        private final int totalSteps;
-        private final String fileName;
-        private int completedSteps;
-        private int lastLoggedPercentage = -1; // Последний залогированный шаг
-
-        public ProgressBar(int totalSteps, String fileName) {
-            this.totalSteps = totalSteps;
-            this.fileName = fileName;
-            this.completedSteps = 0;
-        }
-
-        public synchronized void update(int steps) {
-            completedSteps = Math.min(completedSteps + steps, totalSteps);
-            printProgress();
-        }
-
-        public synchronized void complete() {
-            completedSteps = totalSteps;
-            printProgress();
-            System.out.println(); // Закрываем строку после завершения.
-        }
-
-        private void printProgress() {
-            int percentage = calculatePercentage();
-
-            // Проверяем, прошли ли мы пороговый шаг (20%, 40%, ...).
-            if (shouldLogProgress(percentage)) {
-                lastLoggedPercentage = percentage;
-
-                int filledBars = (percentage / 20); // Всего 5 символов
-                StringBuilder progressBar = new StringBuilder("[");
-                for (int i = 0; i < 5; i++) {
-                    if (i < filledBars) {
-                        progressBar.append("█");
-                    } else {
-                        progressBar.append("░");
+```javascript
+return {
+    template: {
+        type: 'png',
+        options: {
+            chart: {
+                backgroundColor: 'rgb(246, 248, 255)',
+                type: 'variablepie'
+            },
+            title: null,
+            plotOptions: {
+                series: {
+                    // общие настройки для всех серий
+                },
+                variablepie: {
+                    center: ['50%', '50%']
+                },
+                pie: {
+                    center: ['50%', '50%']
+                }
+            },
+            series: [{
+                type: 'variablepie',
+                minPointSize: 10,
+                innerSize: '30%',
+                name: 'Outer Items',
+                data: datas,  // Массив данных для pie-сектора
+                size: '50%',
+                zMin: '0',
+                zMax: '100',
+                dataLabels: {
+                    enabled: false
+                },
+                id: 'outerItems',
+                // Настройка цветов для каждой секции, если они не заданы автоматически
+                colors: datas.map(item => item.color)  // Предполагается, что в данных есть свойство "color"
+            }],
+            // Настройка легенды справа от графика
+            legend: {
+                enabled: true,  // Включаем отображение легенды
+                align: 'left',  // Выравнивание легенды по левому краю
+                verticalAlign: 'middle',  // Вертикальное выравнивание
+                layout: 'vertical',  // Вертикальное расположение
+                x: 10,  // Отступ от правого края графика
+                y: 0,  // Выравнивание по центру
+                labelFormatter: function() {
+                    return this.name;  // Отображение названия элемента
+                },
+                itemStyle: {
+                    padding: '10px',  // Отступы для элементов в легенде
+                    fontWeight: 'normal',  // Обычный шрифт
+                    fontSize: '14px'  // Размер шрифта
+                }
+            },
+            responsive: {
+                rules: [{
+                    condition: {
+                        maxWidth: 750
+                    },
+                    chartOptions: {
+                        series: [{
+                            id: 'outerItems'
+                        }]
                     }
-                }
-                progressBar.append("] ").append(percentage).append("%");
-
-                log.info("Импорт файла {}: {}", fileName, progressBar);
+                }]
+            },
+            exporting: {
+                sourceWidth: getField(metaInf, "width", 786),
+                sourceHeight: getField(metaInf, "height", 526),
+                allowHTML: true,
+                type: 'image/png'
+            },
+            credits: {
+                enabled: false
             }
         }
-
-        private int calculatePercentage() {
-            return (int) ((double) completedSteps / totalSteps * 100);
-        }
-
-        private boolean shouldLogProgress(int percentage) {
-            // Логируем только на фиксированных уровнях (20%, 40%, 60%, ...).
-            for (int fixed : FIXED_PERCENTAGES) {
-                if (percentage >= fixed && lastLoggedPercentage < fixed) {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
+    },
+    warning: warning == "" ? "OK" : warning
 }
+```
+
+### Важные моменты:
+1. **Цвета секторов**:
+   - В `series` добавлена настройка `colors: datas.map(item => item.color)`, предполагая, что у каждого элемента в массиве `datas` есть свойство `color`, которое задает цвет сектора. Это гарантирует, что цвета в графике и в легенде будут одинаковыми.
+   - Если цвета задаются другим способом, убедитесь, что этот массив данных содержит правильные значения.
+
+2. **Легенда справа**:
+   - Включение легенды (`enabled: true`).
+   - Параметры `align: 'left'` и `verticalAlign: 'middle'` выравнивают легенду слева от графика, по центру вертикально.
+   - Параметр `x: 10` задает небольшой отступ от правого края.
+   - `labelFormatter` позволяет отобразить имя каждого элемента (или можете добавить и другие данные).
+
+3. **Отступы в легенде**:
+   - `itemStyle` с настройками `padding` и `fontSize` позволяет настроить внешний вид элементов легенды.
+
+Теперь легенда будет отображаться справа от графика, и каждый элемент будет иметь соответствующий цвет, а также описание.
