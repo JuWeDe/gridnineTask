@@ -1,121 +1,135 @@
-Для решения задачи с использованием библиотеки Highcharts, мы можем настроить отображение легенды и диаграммы в зависимости от ваших требований. Вот примеры конфигураций для каждого случая.
+Для реализации первого варианта (легенда из двух столбцов по два элемента) можно использовать свойства `itemWidth` и `layout: 'horizontal'` в конфигурации легенды Highcharts. Это позволит разбить элементы легенды на два столбца и разместить их по центру под диаграммой.
 
----
-
-### 1. Легенда под диаграммой в двух столбцах
-
-```javascript
-Highcharts.chart('container', {
-    chart: {
-        type: 'pie'
-    },
-    title: {
-        text: 'Пример Pie диаграммы'
-    },
-    plotOptions: {
-        pie: {
-            allowPointSelect: true,
-            cursor: 'pointer',
-            dataLabels: {
-                enabled: true,
-                format: '{point.name}: {point.percentage:.1f}%'
-            }
-        }
-    },
-    legend: {
-        layout: 'vertical',
-        align: 'center',
-        verticalAlign: 'bottom',
-        itemStyle: {
-            width: '50%' // Ширина строки в легенде для двух столбцов
-        },
-        useHTML: true
-    },
-    series: [{
-        name: 'Доля',
-        colorByPoint: true,
-        data: [
-            { name: 'Сектор 1', y: 40 },
-            { name: 'Сектор 2', y: 30 },
-            { name: 'Сектор 3', y: 20 },
-            { name: 'Сектор 4', y: 10 }
-        ]
-    }]
-});
-```
-
----
-
-### 2. Легенда слева и справа от диаграммы (по 2 элемента)
-
-```javascript
-Highcharts.chart('container', {
-    chart: {
-        type: 'pie'
-    },
-    title: {
-        text: 'Пример Pie диаграммы'
-    },
-    plotOptions: {
-        pie: {
-            allowPointSelect: true,
-            cursor: 'pointer',
-            dataLabels: {
-                enabled: true,
-                format: '{point.name}: {point.percentage:.1f}%'
-            }
-        }
-    },
-    legend: {
-        enabled: false // Легенду в стандартном формате отключаем
-    },
-    series: [{
-        name: 'Доля',
-        colorByPoint: true,
-        data: [
-            { name: 'Сектор 1', y: 40 },
-            { name: 'Сектор 2', y: 30 },
-            { name: 'Сектор 3', y: 20 },
-            { name: 'Сектор 4', y: 10 }
-        ]
-    }]
-});
-
-// Добавляем кастомную легенду
-document.addEventListener('DOMContentLoaded', function () {
-    const container = document.getElementById('container');
-    const legendHtml = `
-        <div style="display: flex; justify-content: space-between; margin-top: 20px;">
-            <div style="text-align: left;">
-                <p>Сектор 1</p>
-                <p>Сектор 2</p>
-            </div>
-            <div style="text-align: right;">
-                <p>Сектор 3</p>
-                <p>Сектор 4</p>
-            </div>
-        </div>`;
-    container.insertAdjacentHTML('beforeend', legendHtml);
-});
-```
-
----
-
-### Объяснение:
-1. **Легенда под диаграммой:**
-   - Устанавливается `layout: 'vertical'` и `align: 'center'`.
-   - Используется `itemStyle` для ограничения ширины строк, чтобы легенда автоматически разбивалась на два столбца.
-
-2. **Легенда слева и справа:**
-   - Отключаем стандартную легенду (`legend.enabled: false`).
-   - Создаем кастомную легенду через HTML/CSS и размещаем ее вокруг диаграммы.
-
-### Подключение
-Убедитесь, что Highcharts подключен в вашем проекте:
+Вот исправленный код:
 
 ```html
-<script src="https://code.highcharts.com/highcharts.js"></script>
-<div id="container" style="width: 100%; height: 400px;"></div>
+<script type="text/javascript">
+    $(function() {
+        Highcharts.chart('container', {
+            chart: {
+                type: 'variablepie'
+            },
+            plotOptions: {
+                series: {
+                    // общие настройки для всех серий
+                },
+                variablepie: {
+                    center: ['50%', '50%'],
+                    allowPointSelect: true,
+                    cursor: 'pointer',
+                    dataLabels: {
+                        enabled: true,
+                        format: '{point.name}: {point.percentage:.0f}%'
+                    },
+                    showInLegend: true
+                },
+            },
+            title: {
+                text: 'Testing variable-pie chart'
+            },
+            tooltip: {
+                headerFormat: '',
+                pointFormat: '<span style="color:{point.color}">\u25CF</span> <b> {point.name}</b><br/>' +
+                    'data <b>{point.y}</b><br/>' +
+                    'PrintFormat args (z-index) <b>{point.z}</b><br/>'
+            },
+            series: [{
+                minPointSize: 10,
+                innerSize: '20%',
+                zMin: 0,
+                name: 'countries',
+                data: [
+                    { name: 'Huge category', descr: "description 1", y: 400, z: 4 },
+                    { name: 'Big category', descr: "description 2", y: 300, z: 3 },
+                    { name: 'Medium category', descr: "description 3", y: 200, z: 2 },
+                    { name: 'Small category', descr: "description 4", y: 100, z: 1 },
+                ]
+            }],
+            legend: {
+                enabled: true,
+                layout: 'horizontal',  // Горизонтальная компоновка
+                align: 'center',       // Центрирование
+                verticalAlign: 'bottom',  // Легенда под графиком
+                itemWidth: 150,         // Ширина одного элемента легенды
+                itemStyle: {
+                    fontSize: '14px',
+                    fontWeight: 'normal',
+                },
+                useHTML: true
+            }
+        });
+    });
+</script>
 ```
 
-Попробуйте оба варианта и адаптируйте под свои нужды!
+### Основные моменты:
+1. **Легенда в два столбца:**
+   - Устанавливаем `layout: 'horizontal'` для горизонтального расположения элементов.
+   - Указываем `itemWidth`, чтобы контролировать ширину каждого элемента. Это помогает разделить элементы на два столбца.
+
+2. **Выравнивание:**
+   - `align: 'center'` — для центрирования.
+   - `verticalAlign: 'bottom'` — для размещения легенды под диаграммой.
+
+3. **Кастомизация текста:**
+   - В данном случае для каждого элемента легенды используется `name`.
+
+Попробуйте этот код, и легенда должна быть представлена под графиком в два столбца по два элемента.
+
+
+2)))))))))
+
+<div id="container" style="width: 100%; height: 400px; position: relative;"></div>
+<div id="legend-left" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%);">
+    <div>Huge category</div>
+    <div>Big category</div>
+</div>
+<div id="legend-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); text-align: right;">
+    <div>Medium category</div>
+    <div>Small category</div>
+</div>
+
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<script type="text/javascript">
+    Highcharts.chart('container', {
+        chart: {
+            type: 'variablepie',
+            marginLeft: 150, // Добавляем отступ слева
+            marginRight: 150 // Добавляем отступ справа
+        },
+        plotOptions: {
+            variablepie: {
+                center: ['50%', '50%'],
+                allowPointSelect: true,
+                cursor: 'pointer',
+                dataLabels: {
+                    enabled: true,
+                    format: '{point.name}: {point.percentage:.0f}%'
+                },
+                showInLegend: false // Отключаем стандартную легенду
+            }
+        },
+        title: {
+            text: 'Testing variable-pie chart'
+        },
+        tooltip: {
+            headerFormat: '',
+            pointFormat: '<span style="color:{point.color}">\u25CF</span> <b>{point.name}</b><br/>' +
+                'data: <b>{point.y}</b><br/>' +
+                'PrintFormat args (z-index): <b>{point.z}</b><br/>'
+        },
+        series: [{
+            minPointSize: 10,
+            innerSize: '20%',
+            zMin: 0,
+            name: 'countries',
+            data: [
+                { name: 'Huge category', y: 400, z: 4 },
+                { name: 'Big category', y: 300, z: 3 },
+                { name: 'Medium category', y: 200, z: 2 },
+                { name: 'Small category', y: 100, z: 1 }
+            ]
+        }]
+    });
+</script>
+
