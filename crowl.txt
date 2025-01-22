@@ -1,100 +1,121 @@
-Если вы хотите использовать тип диаграммы `pie` (а не `variablepie`) и настроить отображение правильных категорий в легенде, то нужно внести несколько изменений. Важно правильно настроить структуру данных и использовать тип `pie` для диаграммы, а также корректно настроить отображение меток в легенде.
+Для решения задачи с использованием библиотеки Highcharts, мы можем настроить отображение легенды и диаграммы в зависимости от ваших требований. Вот примеры конфигураций для каждого случая.
 
-### Измененный код для диаграммы типа `pie`:
+---
+
+### 1. Легенда под диаграммой в двух столбцах
 
 ```javascript
-return {
-    template: {
-        type: 'png',
-        options: {
-            chart: {
-                backgroundColor: 'rgb(246, 248, 255)',
-                type: 'pie'  // Устанавливаем тип диаграммы как pie
-            },
-            title: null,
-            plotOptions: {
-                pie: {
-                    center: ['50%', '50%'],
-                    dataLabels: {
-                        enabled: true,  // Показываем метки на срезах
-                        format: '{point.name}: {point.percentage:.1f}%'  // Формат меток на срезах
-                    }
-                }
-            },
-            series: [{
-                type: 'pie',  // Устанавливаем тип диаграммы как pie
-                name: 'Outer Items',
-                data: [
-                    { name: 'Категория 1', y: 45, showInLegend: true },
-                    { name: 'Категория 2', y: 30, showInLegend: true },
-                    { name: 'Категория 3', y: 25, showInLegend: true }
-                ],
-                size: '50%',  // Размер диаграммы
-                dataLabels: {
-                    enabled: false  // Отключаем метки на диаграмме, если они не нужны
-                },
-                id: 'outerItems'
-            }],
-            legend: {
+Highcharts.chart('container', {
+    chart: {
+        type: 'pie'
+    },
+    title: {
+        text: 'Пример Pie диаграммы'
+    },
+    plotOptions: {
+        pie: {
+            allowPointSelect: true,
+            cursor: 'pointer',
+            dataLabels: {
                 enabled: true,
-                align: 'left',
-                verticalAlign: 'middle',
-                layout: 'vertical',
-                borderWidth: 0,
-                margin: 10,
-                itemStyle: {
-                    fontWeight: 'normal',
-                    fontSize: '13px'
-                }
-            },
-            responsive: {
-                rules: [{
-                    condition: {
-                        maxWidth: 750
-                    },
-                    chartOptions: {
-                        series: [{
-                            id: 'outerItems'
-                        }]
-                    }
-                }]
-            },
-            exporting: {
-                sourceWidth: getField(metaInf, "width", 786),
-                sourceHeight: getField(metaInf, "height", 526),
-                allowHTML: true,
-                type: 'image/png'
-            },
-            credits: {
-                enabled: false
+                format: '{point.name}: {point.percentage:.1f}%'
             }
         }
     },
-    warning: warning == "" ? "OK" : warning
-}
+    legend: {
+        layout: 'vertical',
+        align: 'center',
+        verticalAlign: 'bottom',
+        itemStyle: {
+            width: '50%' // Ширина строки в легенде для двух столбцов
+        },
+        useHTML: true
+    },
+    series: [{
+        name: 'Доля',
+        colorByPoint: true,
+        data: [
+            { name: 'Сектор 1', y: 40 },
+            { name: 'Сектор 2', y: 30 },
+            { name: 'Сектор 3', y: 20 },
+            { name: 'Сектор 4', y: 10 }
+        ]
+    }]
+});
 ```
 
-### Важные изменения:
-1. **Тип диаграммы:**
-   - В `chart.type` и в `series.type` указан тип `'pie'`. Это означает, что будет использоваться обычная круговая диаграмма (не `variablepie`).
+---
 
-2. **`data` в `series`:**
-   - В данных для диаграммы каждого сегмента передается свойство `name`, которое будет отображаться в легенде.
-   - Поле `y` отвечает за величину каждого сегмента (например, процент или другие значения).
+### 2. Легенда слева и справа от диаграммы (по 2 элемента)
 
-3. **`dataLabels.format`:**
-   - В метках на срезах выводится название категории (`{point.name}`) и процент от общей суммы (`{point.percentage:.1f}%`).
-   - Если вам не нужны метки на срезах, можно оставить `dataLabels.enabled: false`.
+```javascript
+Highcharts.chart('container', {
+    chart: {
+        type: 'pie'
+    },
+    title: {
+        text: 'Пример Pie диаграммы'
+    },
+    plotOptions: {
+        pie: {
+            allowPointSelect: true,
+            cursor: 'pointer',
+            dataLabels: {
+                enabled: true,
+                format: '{point.name}: {point.percentage:.1f}%'
+            }
+        }
+    },
+    legend: {
+        enabled: false // Легенду в стандартном формате отключаем
+    },
+    series: [{
+        name: 'Доля',
+        colorByPoint: true,
+        data: [
+            { name: 'Сектор 1', y: 40 },
+            { name: 'Сектор 2', y: 30 },
+            { name: 'Сектор 3', y: 20 },
+            { name: 'Сектор 4', y: 10 }
+        ]
+    }]
+});
 
-4. **`showInLegend: true`:**
-   - Этот параметр позволяет каждому элементу отображаться в легенде.
+// Добавляем кастомную легенду
+document.addEventListener('DOMContentLoaded', function () {
+    const container = document.getElementById('container');
+    const legendHtml = `
+        <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+            <div style="text-align: left;">
+                <p>Сектор 1</p>
+                <p>Сектор 2</p>
+            </div>
+            <div style="text-align: right;">
+                <p>Сектор 3</p>
+                <p>Сектор 4</p>
+            </div>
+        </div>`;
+    container.insertAdjacentHTML('beforeend', legendHtml);
+});
+```
 
-5. **Легенда (`legend`):**
-   - Легенда настроена для вертикального отображения справа от диаграммы с дополнительными стилями для элементов.
+---
 
-### Резюме:
-- **Тип диаграммы:** Теперь используется обычный тип `pie` (не `variablepie`).
-- **Легенда:** Каждому элементу присваивается имя, и он отображается в легенде.
-- **Формат меток:** Выводится процент и имя категории для срезов, но это можно настроить по вашему усмотрению.
+### Объяснение:
+1. **Легенда под диаграммой:**
+   - Устанавливается `layout: 'vertical'` и `align: 'center'`.
+   - Используется `itemStyle` для ограничения ширины строк, чтобы легенда автоматически разбивалась на два столбца.
 
-Теперь ваш график будет отображать категории в легенде правильно, и вместо `"slice"` будет выводиться имя каждой категории из массива `data`.
+2. **Легенда слева и справа:**
+   - Отключаем стандартную легенду (`legend.enabled: false`).
+   - Создаем кастомную легенду через HTML/CSS и размещаем ее вокруг диаграммы.
+
+### Подключение
+Убедитесь, что Highcharts подключен в вашем проекте:
+
+```html
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<div id="container" style="width: 100%; height: 400px;"></div>
+```
+
+Попробуйте оба варианта и адаптируйте под свои нужды!
