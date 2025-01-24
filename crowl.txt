@@ -1,18 +1,41 @@
-legend: {
-    layout: 'horizontal',  // Горизонтальное расположение
-    align: 'center',  // Центрирование легенды
-    verticalAlign: 'bottom',  // Позиция легенды внизу
-    itemStyle: {
-        width: '100px',  // Ширина каждого элемента легенды
-        display: 'inline-block'  // Отображение элементов как блоков
+Highcharts.chart('container', {
+    chart: {
+        type: 'pie'
     },
-    useHTML: true,  // Разрешает использование HTML в легенде
-    labelFormatter: function() {
-        return this.name;  // Форматирование имени в легенде
+    title: {
+        text: 'Пример графика с легендой'
     },
-    itemDistance: 10,  // Расстояние между элементами легенды
-    x: 0,
-    y: 0,
-    maxHeight: 100,  // Ограничение по высоте
-    width: 220  // Ширина легенды
-}
+    legend: {
+        layout: 'horizontal',        // Горизонтальная легенда
+        align: 'center',             // Центрирование легенды
+        verticalAlign: 'bottom',     // Размещение внизу
+        itemStyle: {
+            fontWeight: 'bold'
+        },
+        maxHeight: 150,              // Ограничение высоты легенды
+        itemDistance: 10,            // Расстояние между элементами
+        symbolWidth: 20,             // Размер символов в легенде
+        symbolHeight: 20,            // Высота символов
+        labelFormatter: function() {
+            return this.name;       // Форматирование текста в легенде
+        },
+        // Разбиение легенды на 2 столбца (максимально два элемента в каждом)
+        itemMarginTop: 5,
+        useHTML: true,               // Разрешает использование HTML
+        width: 300,                  // Ширина легенды
+        reversed: false,
+        navigation: {
+            activeColor: '#3E576F',  // Цвет активных элементов
+            inactiveColor: '#CCC'    // Цвет неактивных элементов
+        }
+    },
+    series: [{
+        data: [
+            { name: 'Категория 1', y: 25 },
+            { name: 'Категория 2', y: 15 },
+            { name: 'Категория 3', y: 20 },
+            { name: 'Категория 4', y: 30 },
+            { name: 'Категория 5', y: 10 }
+        ]
+    }]
+});
