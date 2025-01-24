@@ -1,108 +1,35 @@
-Чтобы легенды с цветными кругами находились **на уровне графика по бокам от него**, нужно настроить их позиционирование с помощью CSS и дополнительно расширить контейнер графика для учета этих легенд. Вот как можно это сделать:
-
-### Полный рабочий код:
-```html
-<div style="position: relative; width: 100%; height: 400px;">
-    <!-- Контейнер для графика -->
-    <div id="container" style="position: relative; width: calc(100% - 300px); height: 100%; margin: 0 auto;"></div>
-    <!-- Легенда слева -->
-    <div id="legend-left" style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 150px;">
-        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-            <div style="width: 10px; height: 10px; background-color: #7cb5ec; border-radius: 50%; margin-right: 5px;"></div>
-            Huge category
-        </div>
-        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-            <div style="width: 10px; height: 10px; background-color: #434348; border-radius: 50%; margin-right: 5px;"></div>
-            Big category
-        </div>
-    </div>
-    <!-- Легенда справа -->
-    <div id="legend-right" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 150px; text-align: right;">
-        <div style="display: flex; align-items: center; justify-content: flex-end; margin-bottom: 10px;">
-            <div style="width: 10px; height: 10px; background-color: #90ed7d; border-radius: 50%; margin-right: 5px;"></div>
-            Medium category
-        </div>
-        <div style="display: flex; align-items: center; justify-content: flex-end; margin-bottom: 10px;">
-            <div style="width: 10px; height: 10px; background-color: #f7a35c; border-radius: 50%; margin-right: 5px;"></div>
-            Small category
-        </div>
-    </div>
-</div>
-
-<script src="https://code.highcharts.com/highcharts.js"></script>
-<script type="text/javascript">
-    Highcharts.chart('container', {
-        chart: {
-            type: 'variablepie',
-            marginLeft: 100, // Дополнительное пространство для графика
-            marginRight: 100 // Дополнительное пространство для графика
-        },
-        plotOptions: {
-            variablepie: {
-                center: ['50%', '50%'],
-                allowPointSelect: true,
-                cursor: 'pointer',
-                dataLabels: {
-                    enabled: true,
-                    useHTML: true,
-                    format: `
-                        <div style="display: flex; align-items: center;">
-                            <div style="width: 10px; height: 10px; background-color: {point.color}; border-radius: 50%; margin-right: 5px;"></div>
-                            {point.name}: {point.percentage:.0f}%
-                        </div>
-                    `
-                },
-                showInLegend: false
-            }
-        },
-        title: {
-            text: 'Testing variable-pie chart'
-        },
-        tooltip: {
-            headerFormat: '',
-            pointFormat: `
-                <span style="color:{point.color};">\u25CF</span> <b>{point.name}</b><br/>
-                Data: <b>{point.y}</b><br/>
-                Percentage: <b>{point.percentage:.1f}%</b><br/>
-            `
-        },
-        series: [{
-            minPointSize: 10,
-            innerSize: '20%',
-            zMin: 0,
-            name: 'countries',
-            data: [
-                { name: 'Huge category', y: 400, z: 4, color: '#7cb5ec' },
-                { name: 'Big category', y: 300, z: 3, color: '#434348' },
-                { name: 'Medium category', y: 200, z: 2, color: '#90ed7d' },
-                { name: 'Small category', y: 100, z: 1, color: '#f7a35c' }
-            ]
-        }]
-    });
-</script>
-```
-
----
-
-### Изменения:
-1. **Легенда на уровне графика:**
-   - Добавлены два блока для легенды (`legend-left` и `legend-right`) с использованием `position: absolute`.
-   - Легенды располагаются по бокам графика с помощью CSS:
-     - Левая легенда (`legend-left`) находится слева от графика.
-     - Правая легенда (`legend-right`) находится справа от графика.
-
-2. **Ширина графика:**
-   - Основной контейнер графика (`#container`) сужен до `calc(100% - 300px)` (100% ширины минус 150px для каждой легенды).
-   - Это обеспечивает место для размещения легенд слева и справа.
-
-3. **Цветной круг в легенде:**
-   - Цветной круг добавляется с использованием `div` с `background-color` и `border-radius: 50%`.
-
-4. **Вертикальное центрирование:**
-   - Используется `transform: translateY(-50%)` для выравнивания легенд по центру диаграммы.
-
----
-
-### Результат:
-- Легенда будет отображаться **слева и справа от графика**, на одном уровне с ним.
-- Легенда будет содержать **цветные круги**, соответствующие цветам секторов.
+Highcharts.chart('container', {
+  chart: {
+    type: 'pie'
+  },
+  title: {
+    text: 'Pie Chart with Two Columns Legend'
+  },
+  series: [{
+    name: 'Share',
+    data: [
+      ['Apples', 45.0],
+      ['Bananas', 26.8],
+      ['Oranges', 18.0],
+      ['Pears', 10.2],
+      ['Grapes', 15.5],
+      ['Cherries', 12.3],
+      ['Mangoes', 8.7]
+    ]
+  }],
+  legend: {
+    layout: 'horizontal',   // Легенда будет горизонтальной
+    align: 'center',        // Выравнивание по центру
+    verticalAlign: 'top',   // Вертикальное выравнивание сверху
+    itemWidth: 100,         // Ширина каждого элемента в легенде
+    maxHeight: 40,          // Ограничиваем высоту легенды, чтобы она поместилась
+    itemStyle: {
+      fontSize: '13px',
+      fontWeight: 'normal'
+    },
+    // Устанавливаем количество элементов на строку (это будет эмулировать два столбца)
+    floating: true,
+    x: 0,
+    y: 20
+  }
+});
