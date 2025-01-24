@@ -1,35 +1,18 @@
-Highcharts.chart('container', {
-  chart: {
-    type: 'pie'
-  },
-  title: {
-    text: 'Pie Chart with Two Columns Legend'
-  },
-  series: [{
-    name: 'Share',
-    data: [
-      ['Apples', 45.0],
-      ['Bananas', 26.8],
-      ['Oranges', 18.0],
-      ['Pears', 10.2],
-      ['Grapes', 15.5],
-      ['Cherries', 12.3],
-      ['Mangoes', 8.7]
-    ]
-  }],
-  legend: {
-    layout: 'horizontal',   // Легенда будет горизонтальной
-    align: 'center',        // Выравнивание по центру
-    verticalAlign: 'top',   // Вертикальное выравнивание сверху
-    itemWidth: 100,         // Ширина каждого элемента в легенде
-    maxHeight: 40,          // Ограничиваем высоту легенды, чтобы она поместилась
+legend: {
+    layout: 'horizontal',  // Горизонтальное расположение
+    align: 'center',  // Центрирование легенды
+    verticalAlign: 'bottom',  // Позиция легенды внизу
     itemStyle: {
-      fontSize: '13px',
-      fontWeight: 'normal'
+        width: '100px',  // Ширина каждого элемента легенды
+        display: 'inline-block'  // Отображение элементов как блоков
     },
-    // Устанавливаем количество элементов на строку (это будет эмулировать два столбца)
-    floating: true,
+    useHTML: true,  // Разрешает использование HTML в легенде
+    labelFormatter: function() {
+        return this.name;  // Форматирование имени в легенде
+    },
+    itemDistance: 10,  // Расстояние между элементами легенды
     x: 0,
-    y: 20
-  }
-});
+    y: 0,
+    maxHeight: 100,  // Ограничение по высоте
+    width: 220  // Ширина легенды
+}
