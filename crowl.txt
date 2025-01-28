@@ -1,1 +1,3 @@
 return `${this.name}: <span style="color:${this.color};">${this.percentage.toFixed(1)}%</span>`;
+return `${this.name}: <span style="color:${this.color}; font-weight: bold; font-size: 15px; font-family: Tahoma;">${this.percentage.toFixed(1)}%</span>`;
+       
