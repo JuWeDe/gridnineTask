@@ -1,41 +1,62 @@
-Highcharts.chart('container', {
+Highcharts.chart('pie1', {
     chart: {
-        type: 'pie'
+        type: 'pie',
+        marginLeft: 100,
+        marginRight: 100
     },
-    title: {
-        text: 'Пример графика с легендой'
-    },
-    legend: {
-        layout: 'horizontal',        // Горизонтальная легенда
-        align: 'center',             // Центрирование легенды
-        verticalAlign: 'bottom',     // Размещение внизу
-        itemStyle: {
-            fontWeight: 'bold'
-        },
-        maxHeight: 150,              // Ограничение высоты легенды
-        itemDistance: 10,            // Расстояние между элементами
-        symbolWidth: 20,             // Размер символов в легенде
-        symbolHeight: 20,            // Высота символов
-        labelFormatter: function() {
-            return this.name;       // Форматирование текста в легенде
-        },
-        // Разбиение легенды на 2 столбца (максимально два элемента в каждом)
-        itemMarginTop: 5,
-        useHTML: true,               // Разрешает использование HTML
-        width: 300,                  // Ширина легенды
-        reversed: false,
-        navigation: {
-            activeColor: '#3E576F',  // Цвет активных элементов
-            inactiveColor: '#CCC'    // Цвет неактивных элементов
+    plotOptions: {
+        pie: {
+            center: ['50%', '50%'],
+            allowPointSelect: true,
+            cursor: 'pointer',
+            dataLabels: {
+                enabled: false,
+                useHTML: true,
+                format: '<div style="display: flex; align-items: center;">' +
+                    '<div style="width: 10px; height: 10px; background-color: {point.color}; border-radius: 50%; margin-right: 5px;"></div>' +
+                    '{point.name}: {point.percentage:.0f}%' +
+                '</div>'
+            },
+            showInLegend: true
         }
     },
+    title: {
+        text: ''
+    },
+    tooltip: {
+        headerFormat: '',
+        pointFormat: '<span style="color:{point.color};">\u25CF</span> <b>{point.name}</b><br/>' +
+            'Data: <b>{point.y}</b><br/>' +
+            'Percentage: <b>{point.percentage:.1f}%</b><br/>'
+    },
+    legend: {
+        enabled: true,
+        layout: 'horizontal',
+        align: 'center',
+        verticalAlign: 'bottom',
+        itemStyle: {
+            fontSize: '13px',
+            fontWeight: 'normal',
+            display: 'inline-block'
+        },
+        itemDistance: 20,
+        labelFormatter: function () {
+            // Добавляем процент доли к названию элемента
+            return `${this.name}: ${this.percentage.toFixed(1)}%`;
+        },
+        useHTML: true
+    },
     series: [{
+        size: '100%',
+        minPointSize: 10,
+        innerSize: '35%',
+        zMin: 0,
+        name: 'asset structure',
         data: [
-            { name: 'Категория 1', y: 25 },
-            { name: 'Категория 2', y: 15 },
-            { name: 'Категория 3', y: 20 },
-            { name: 'Категория 4', y: 30 },
-            { name: 'Категория 5', y: 10 }
+            { name: 'Облигации', y: 65.4, z: 4, color: '#a1e81e' },
+            { name: 'Акции', y: 17.5, z: 3, color: '#2ca530' },
+            { name: 'Денежные средства', y: 15.1, z: 2, color: '#39cba2' },
+            { name: 'Иное', y: 2, z: 1, color: '#bfbfbf' }
         ]
     }]
 });
