@@ -1,72 +1,83 @@
 <script type="text/javascript">
-    Highcharts.chart('pie2', {
+    // Custom template helper
+    Highcharts.Templating.helpers.abs = value => Math.abs(value);
+
+    // Данные для графика
+    const data = [17.5, 8.0, 4.9, -3.3, -7.7, -12.1];
+
+    // Находим максимальное по модулю число в массиве данных
+    const maxAbsValue = Math.max(...data.map(Math.abs));
+
+    // Рассчитываем границы по формуле 1.6 * максимальное по модулю число
+    const boundaryValue = 1.6 * maxAbsValue;
+
+    // Функция для определения цвета столбца
+    const getColor = (value) => value >= 0 ? '#2ca528' : '#ff0000';
+
+    Highcharts.chart('barChart', {
         chart: {
-            type: 'variablepie',
-            marginLeft: 100, // Дополнительное пространство для графика
-            marginRight: 100 // Дополнительное пространство для графика
+            inverted: true,
+            type: 'column'
         },
+        title: '',
+        xAxis: [{
+            visible: false,
+            lineColor: 'transparent' // Делаем ось X прозрачной
+        }],
+        yAxis: {
+            visible: false
+        },
+
         plotOptions: {
-            variablepie: {
-                center: ['50%', '50%'],
-                allowPointSelect: true,
-                cursor: 'pointer',
-                dataLabels: {
-                    enabled: false,
-                    format: "{point.y}%",
-                    color: 'rgba(132, 145, 164, 255)',
-                    style: {
-                        fontFamily: 'SB Sans Display',
-                        fontSize: '10',
-                        fontWeight: 'normal'
-                    }
-                },
-                showInLegend: true
+            column: {
+                grouping: false,
+                shadow: false,
+                colorByPoint: true // Окрашиваем столбцы в зависимости от их значения
             }
         },
-        title: {
-            text: ''
-        },
+
+        series: [
+            {
+                name: 'leftShadow',
+                data: data.map(() => -boundaryValue),
+                color: '#f2f2f2',
+                borderRadius: '50%'
+            }, {
+                name: 'rightShadow',
+                data: data.map(() => boundaryValue),
+                color: '#f2f2f2',
+                borderRadius: '50%'
+            },
+            {
+                name: 'left',
+                data: data.filter(value => value < 0),
+                color: {
+                    linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
+                    stops: [
+                        [0, "#ffffff"], // start
+                        [0.4, '#a6a6a6'], // middle
+                        [1, '#a6a6a6'] // end
+                    ]
+                },
+                borderRadius: '50%'
+            }, {
+                name: 'right',
+                data: data.filter(value => value >= 0),
+                color: {
+                    linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
+                    stops: [
+                        [0, '#2ca528'],
+                        [0.6, '#2ca528'],
+                        [1, "#ffffff"]
+                    ]
+                },
+                borderRadius: '50%'
+            },
+        ],
+
         legend: {
-            enabled: true,  // Включаем отображение легенды
-            align: 'center',  // Выравнивание легенды по левому краю
-            verticalAlign: 'bottom',
-            layout: 'vertical',  // Вертикальное расположение
-            x: 0,  // Отступ от правого края графика
-            y: 0,  // Выравнивание по центру
-            labelFormatter: function () {
-                return this.name;  // Отображение названия элемента descr(additional) name
-            },
-            itemStyle: {
-                fontWeight: 'normal',
-                fontSize: '14px',
-                y: 20,
-            },
-            useHTML: true
-        },
-        xAxis: {
-            lineColor: 'transparent' // Прозрачная ось X
-        },
-        series: [{
-            size: '100%',
-            minPointSize: 10,
-            innerSize: '35%',
-            zMin: 0,
-            name: 'asset structure',
-            data: (function() {
-                var data = [
-                    { name: 'Нефтегаз', y: 45, z: 1, color: '#39cba2' },
-                    { name: 'Промышленность', y: 26, z: 2, color: '#a1e81e' },
-                    { name: 'Банки и финансы', y: 10, z: 2, color: '#00b0f0' },
-                    { name: 'Финансы', y: 7, z: 1, color: '#2ca530' },
-                    { name: 'IT сектор', y: 6, z: 2, color: '#abeed2' },
-                    { name: 'Иное', y: 6, z: 1, color: '#bfbfbf' }
-                ];
-                var maxAbsValue = Math.max(...data.map(point => Math.abs(point.y)));
-                var boundaryValue = 1.6 * maxAbsValue;
-                data.push({ name: 'Граница', y: boundaryValue, z: 0, color: boundaryValue >= 0 ? '#39cba2' : '#ff0000' });
-                data.push({ name: 'Граница', y: -boundaryValue, z: 0, color: -boundaryValue >= 0 ? '#39cba2' : '#ff0000' });
-                return data;
-            })()
-        }]
+            enabled: false
+        }
     });
+
 </script>
