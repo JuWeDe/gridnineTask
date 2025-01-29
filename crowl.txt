@@ -1,3 +1,72 @@
-return `${this.name}: <span style="color:${this.color};">${this.percentage.toFixed(1)}%</span>`;
-return `${this.name}: <span style="color:${this.color}; font-weight: bold; font-size: 15px; font-family: Tahoma;">${this.percentage.toFixed(1)}%</span>`;
-       
+<script type="text/javascript">
+    Highcharts.chart('pie2', {
+        chart: {
+            type: 'variablepie',
+            marginLeft: 100, // Дополнительное пространство для графика
+            marginRight: 100 // Дополнительное пространство для графика
+        },
+        plotOptions: {
+            variablepie: {
+                center: ['50%', '50%'],
+                allowPointSelect: true,
+                cursor: 'pointer',
+                dataLabels: {
+                    enabled: false,
+                    format: "{point.y}%",
+                    color: 'rgba(132, 145, 164, 255)',
+                    style: {
+                        fontFamily: 'SB Sans Display',
+                        fontSize: '10',
+                        fontWeight: 'normal'
+                    }
+                },
+                showInLegend: true
+            }
+        },
+        title: {
+            text: ''
+        },
+        legend: {
+            enabled: true,  // Включаем отображение легенды
+            align: 'center',  // Выравнивание легенды по левому краю
+            verticalAlign: 'bottom',
+            layout: 'vertical',  // Вертикальное расположение
+            x: 0,  // Отступ от правого края графика
+            y: 0,  // Выравнивание по центру
+            labelFormatter: function () {
+                return this.name;  // Отображение названия элемента descr(additional) name
+            },
+            itemStyle: {
+                fontWeight: 'normal',
+                fontSize: '14px',
+                y: 20,
+            },
+            useHTML: true
+        },
+        xAxis: {
+            lineColor: 'transparent' // Прозрачная ось X
+        },
+        series: [{
+            size: '100%',
+            minPointSize: 10,
+            innerSize: '35%',
+            zMin: 0,
+            name: 'asset structure',
+            data: (function() {
+                var data = [
+                    { name: 'Нефтегаз', y: 45, z: 1, color: '#39cba2' },
+                    { name: 'Промышленность', y: 26, z: 2, color: '#a1e81e' },
+                    { name: 'Банки и финансы', y: 10, z: 2, color: '#00b0f0' },
+                    { name: 'Финансы', y: 7, z: 1, color: '#2ca530' },
+                    { name: 'IT сектор', y: 6, z: 2, color: '#abeed2' },
+                    { name: 'Иное', y: 6, z: 1, color: '#bfbfbf' }
+                ];
+                var maxAbsValue = Math.max(...data.map(point => Math.abs(point.y)));
+                var boundaryValue = 1.6 * maxAbsValue;
+                data.push({ name: 'Граница', y: boundaryValue, z: 0, color: boundaryValue >= 0 ? '#39cba2' : '#ff0000' });
+                data.push({ name: 'Граница', y: -boundaryValue, z: 0, color: -boundaryValue >= 0 ? '#39cba2' : '#ff0000' });
+                return data;
+            })()
+        }]
+    });
+</script>
