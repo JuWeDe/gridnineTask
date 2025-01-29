@@ -1,108 +1,112 @@
-<script type="text/javascript">
-    Highcharts.Templating.helpers.abs = value => Math.abs(value);
+// Custom template helper
+Highcharts.Templating.helpers.abs = value => Math.abs(value);
 
-    // Данные
-    const dataLeft = [0, 0, 0, -3.3, -7.7, -12.1];
-    const dataRight = [17.5, 8.0, 4.9];
-    const companies = ['Company A', 'Company B', 'Company C', 'Company D', 'Company E', 'Company F'];
+// Age categories
+const categoriesRight = [
+    '+17.5%', '+8.0%', '+4.9%', '-3.3%', '-7.7%', '-12.1%'
+]; // Описания напротив баров справа
+const categoriesLeft = [
+    'Пермьэнергосбыт',
+    'Ставропольэнергосбыт ап',
+    'РН-Западная Сибирь',
+    'Ковровский МехЗд',
+    'Пермьэнергосбыт ап',
+    'Окей групп др'
+]; // Описания напротив баров слева
 
-    // Находим самое большое по модулю число в обоих массивах
-    const maxDataValue = Math.max(
-        ...dataLeft.map(Math.abs),
-        ...dataRight.map(Math.abs)
-    );
+// Данные
+const leftData = [0, 0, 0, -3.3, -7.7, -12.1];
+const rightData = [17.5, 8.0, 4.9];
 
-    // Рассчитываем границы оси Y (1.6 * максимальное значение)
-    const yAxisMax = 1.6 * maxDataValue;
+// Найдём максимальное абсолютное значение
+const maxValue = Math.max(
+    ...leftData.map(Math.abs),
+    ...rightData.map(Math.abs)
+);
 
-    Highcharts.chart('barChart', {
-        chart: {
-            inverted: true,
-            type: 'column',
-            borderWidth: 0,  // Убираем границы графика
-            backgroundColor: 'transparent'  // Прозрачный фон
+// Вычислим значение для "теневых" столбцов
+const shadowValue = Math.abs(maxValue) * 1.6;
+
+Highcharts.chart('barChart', {
+    chart: {
+        inverted: true,
+        type: 'column'
+    },
+    title: '',
+    xAxis: [{
+        categories: categoriesLeft,
+        reversed: true,
+        labels: {
+            step: 1
         },
-        title: '',
-        xAxis: [{
-            categories: companies,  
-            labels: {
-                rotation: 0, 
-                style: {
-                    color: '#000000',  
-                    fontSize: '14px'  
-                }
-            },
-            visible: true,
-            lineWidth: 0,
-            tickWidth: 0,
-            gridLineWidth: 0,  
-        }],
-        yAxis: {
-            visible: true,
-            max: yAxisMax,
-            min: -yAxisMax,
-            labels: {
-                formatter: function () {
-                    return this.value >= 0 ?
-                        '<span style="color: #2ca528;">' + this.value + '</span>' : 
-                        '<span style="color: #d52b1e;">' + this.value + '</span>';
-                }
-            },
-            gridLineWidth: 0,  
-            lineWidth: 0,  
-            tickWidth: 0   
-        },
-
-        plotOptions: {
-            column: {
-                grouping: false,
-                shadow: false
+        visible: true
+    }, { // mirror axis on right side
+        opposite: true,
+        reversed: false,
+        categories: categoriesRight,
+        tickmarkWidth: 0,
+        linkedTo: 0,
+        labels: {
+            step: 1,
+            style: {
+                color: "#2ca530"
             }
-        },
-
-        series: [
-            {
-                name: 'leftShadow',
-                data: Array(companies.length).fill(-yAxisMax), // Делаем длину массива соответствующей количеству компаний
-                color: 'rgba(0, 0, 0, 0)',  // Полностью прозрачный цвет
-                borderRadius: '50%'
-            }, 
-            {
-                name: 'rightShadow',
-                data: Array(companies.length).fill(yAxisMax),
-                color: 'rgba(0, 0, 0, 0)',  // Полностью прозрачный цвет
-                borderRadius: '50%'
-            },
-            {
-                name: 'left',
-                data: dataLeft,
-                color: {
-                    linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
-                    stops: [
-                        [0, "#ffffff"],
-                        [0.4, '#a6a6a6'],
-                        [1, '#a6a6a6']
-                    ]
-                },
-                borderRadius: '50%'
-            }, 
-            {
-                name: 'right',
-                data: dataRight,
-                color: {
-                    linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
-                    stops: [
-                        [0, '#2ca528'],
-                        [0.6, '#2ca528'],
-                        [1, "#ffffff"]
-                    ]
-                },
-                borderRadius: '50%'
-            },
-        ],
-
-        legend: {
-            enabled: false
         }
-    });
-</script>
+    }],
+    yAxis: {
+        max: 30,
+        min: -30,
+        visible: false
+    },
+    plotOptions: {
+        column: {
+            grouping: false,
+            shadow: false
+        }
+    },
+    series: [
+        {
+            name: 'leftShadow',
+            data: Array(leftData.length).fill(-shadowValue),
+            color: '#f2f2f2',
+            borderRadius: '50%',
+            opacity: 0 // Делаем полосу невидимой
+        },
+        {
+            name: 'rightShadow',
+            data: Array(rightData.length).fill(shadowValue),
+            color: '#f2f2f2',
+            borderRadius: '50%',
+            opacity: 0 // Делаем полосу невидимой
+        },
+        {
+            name: 'left',
+            data: leftData,
+            color: {
+                linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
+                stops: [
+                    [0, "#ffffff"], // start
+                    [0.4, '#a6a6a6'], // middle
+                    [1, '#a6a6a6'] // end
+                ]
+            },
+            borderRadius: '50%'
+        },
+        {
+            name: 'right',
+            data: rightData,
+            color: {
+                linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
+                stops: [
+                    [0, '#2ca530'],
+                    [0.6, '#2ca530'],
+                    [1, "#ffffff"]
+                ]
+            },
+            borderRadius: '50%'
+        },
+    ],
+    legend: {
+        enabled: false
+    }
+});
