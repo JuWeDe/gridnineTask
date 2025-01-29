@@ -4,6 +4,7 @@
     // Ваши данные для вычисления максимального числа по модулю
     const dataLeft = [0, 0, 0, -3.3, -7.7, -12.1];
     const dataRight = [17.5, 8.0, 4.9];
+    const companies = ['Company A', 'Company B', 'Company C', 'Company D', 'Company E', 'Company F'];
 
     // Находим самое большое по модулю число
     const maxDataValue = Math.max(Math.abs(Math.max(...dataLeft)), Math.abs(Math.max(...dataRight)));
@@ -14,18 +15,24 @@
     Highcharts.chart('barChart', {
         chart: {
             inverted: true,
-            type: 'column'
+            type: 'column',
+            borderWidth: 0,  // Убираем границы графика
+            backgroundColor: 'transparent'  // Прозрачный фон
         },
         title: '',
         xAxis: [{
-            visible: false,
-            lineWidth: 0, // Убираем линию оси X
-            gridLineWidth: 0, // Убираем сетку
+            categories: companies,  // Названия компаний
             labels: {
+                rotation: 0, // Размещаем метки вертикально
                 style: {
-                    color: 'transparent' // Прозрачные метки на оси X
+                    color: '#000000',  // Цвет текста
+                    fontSize: '14px'  // Размер шрифта
                 }
-            }
+            },
+            visible: true,
+            lineWidth: 0,  // Убираем линию оси X
+            tickWidth: 0,  // Убираем метки на оси X
+            gridLineWidth: 0,  // Убираем линии сетки по оси X
         }],
         yAxis: {
             visible: true,
@@ -38,7 +45,10 @@
                         '<span style="color: #2ca528;">' + this.value + '</span>' : 
                         '<span style="color: #d52b1e;">' + this.value + '</span>';
                 }
-            }
+            },
+            gridLineWidth: 0,  // Убираем линии сетки по оси Y
+            lineWidth: 0,  // Убираем линию оси Y
+            tickWidth: 0   // Убираем метки на оси Y
         },
 
         plotOptions: {
