@@ -1,13 +1,16 @@
 <script type="text/javascript">
     Highcharts.Templating.helpers.abs = value => Math.abs(value);
 
-    // Ваши данные для вычисления максимального числа по модулю
+    // Данные
     const dataLeft = [0, 0, 0, -3.3, -7.7, -12.1];
     const dataRight = [17.5, 8.0, 4.9];
     const companies = ['Company A', 'Company B', 'Company C', 'Company D', 'Company E', 'Company F'];
 
-    // Находим самое большое по модулю число
-    const maxDataValue = Math.max(Math.abs(Math.max(...dataLeft)), Math.abs(Math.max(...dataRight)));
+    // Находим самое большое по модулю число в обоих массивах
+    const maxDataValue = Math.max(
+        ...dataLeft.map(Math.abs),
+        ...dataRight.map(Math.abs)
+    );
 
     // Рассчитываем границы оси Y (1.6 * максимальное значение)
     const yAxisMax = 1.6 * maxDataValue;
@@ -21,18 +24,18 @@
         },
         title: '',
         xAxis: [{
-            categories: companies,  // Названия компаний
+            categories: companies,  
             labels: {
-                rotation: 0, // Размещаем метки вертикально
+                rotation: 0, 
                 style: {
-                    color: '#000000',  // Цвет текста
-                    fontSize: '14px'  // Размер шрифта
+                    color: '#000000',  
+                    fontSize: '14px'  
                 }
             },
             visible: true,
-            lineWidth: 0,  // Убираем линию оси X
-            tickWidth: 0,  // Убираем метки на оси X
-            gridLineWidth: 0,  // Убираем линии сетки по оси X
+            lineWidth: 0,
+            tickWidth: 0,
+            gridLineWidth: 0,  
         }],
         yAxis: {
             visible: true,
@@ -40,15 +43,14 @@
             min: -yAxisMax,
             labels: {
                 formatter: function () {
-                    // Меняем цвет числа в зависимости от его знака
                     return this.value >= 0 ?
                         '<span style="color: #2ca528;">' + this.value + '</span>' : 
                         '<span style="color: #d52b1e;">' + this.value + '</span>';
                 }
             },
-            gridLineWidth: 0,  // Убираем линии сетки по оси Y
-            lineWidth: 0,  // Убираем линию оси Y
-            tickWidth: 0   // Убираем метки на оси Y
+            gridLineWidth: 0,  
+            lineWidth: 0,  
+            tickWidth: 0   
         },
 
         plotOptions: {
@@ -61,17 +63,14 @@
         series: [
             {
                 name: 'leftShadow',
-                data: [
-                    -28, -28, -28, -28, -28, -28
-                ],
-                color: '#f2f2f2',
+                data: Array(companies.length).fill(-yAxisMax), // Делаем длину массива соответствующей количеству компаний
+                color: 'rgba(0, 0, 0, 0)',  // Полностью прозрачный цвет
                 borderRadius: '50%'
-            }, {
+            }, 
+            {
                 name: 'rightShadow',
-                data: [
-                    28, 28, 28, 28, 28, 28
-                ],
-                color: '#f2f2f2',
+                data: Array(companies.length).fill(yAxisMax),
+                color: 'rgba(0, 0, 0, 0)',  // Полностью прозрачный цвет
                 borderRadius: '50%'
             },
             {
@@ -80,13 +79,14 @@
                 color: {
                     linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
                     stops: [
-                        [0, "#ffffff"], // start
-                        [0.4, '#a6a6a6'], // middle
-                        [1, '#a6a6a6'] // end
+                        [0, "#ffffff"],
+                        [0.4, '#a6a6a6'],
+                        [1, '#a6a6a6']
                     ]
                 },
                 borderRadius: '50%'
-            }, {
+            }, 
+            {
                 name: 'right',
                 data: dataRight,
                 color: {
