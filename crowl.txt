@@ -1,112 +1,41 @@
-// Custom template helper
-Highcharts.Templating.helpers.abs = value => Math.abs(value);
-
-// Age categories
-const categoriesRight = [
-    '+17.5%', '+8.0%', '+4.9%', '-3.3%', '-7.7%', '-12.1%'
-]; // Описания напротив баров справа
-const categoriesLeft = [
-    'Пермьэнергосбыт',
-    'Ставропольэнергосбыт ап',
-    'РН-Западная Сибирь',
-    'Ковровский МехЗд',
-    'Пермьэнергосбыт ап',
-    'Окей групп др'
-]; // Описания напротив баров слева
-
-// Данные
-const leftData = [0, 0, 0, -3.3, -7.7, -12.1];
-const rightData = [17.5, 8.0, 4.9];
-
-// Найдём максимальное абсолютное значение
-const maxValue = Math.max(
-    ...leftData.map(Math.abs),
-    ...rightData.map(Math.abs)
-);
-
-// Вычислим значение для "теневых" столбцов
-const shadowValue = Math.abs(maxValue) * 1.6;
-
-Highcharts.chart('barChart', {
-    chart: {
-        inverted: true,
-        type: 'column'
-    },
-    title: '',
-    xAxis: [{
-        categories: categoriesLeft,
-        reversed: true,
-        labels: {
-            step: 1
-        },
-        visible: true
-    }, { // mirror axis on right side
-        opposite: true,
-        reversed: false,
-        categories: categoriesRight,
-        tickmarkWidth: 0,
-        linkedTo: 0,
-        labels: {
-            step: 1,
-            style: {
-                color: "#2ca530"
-            }
-        }
-    }],
-    yAxis: {
-        max: 30,
-        min: -30,
-        visible: false
-    },
-    plotOptions: {
-        column: {
-            grouping: false,
-            shadow: false
-        }
-    },
-    series: [
-        {
-            name: 'leftShadow',
-            data: Array(leftData.length).fill(-shadowValue),
-            color: '#f2f2f2',
-            borderRadius: '50%',
-            opacity: 0 // Делаем полосу невидимой
-        },
-        {
-            name: 'rightShadow',
-            data: Array(rightData.length).fill(shadowValue),
-            color: '#f2f2f2',
-            borderRadius: '50%',
-            opacity: 0 // Делаем полосу невидимой
-        },
-        {
-            name: 'left',
-            data: leftData,
-            color: {
-                linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
-                stops: [
-                    [0, "#ffffff"], // start
-                    [0.4, '#a6a6a6'], // middle
-                    [1, '#a6a6a6'] // end
-                ]
-            },
-            borderRadius: '50%'
-        },
-        {
-            name: 'right',
-            data: rightData,
-            color: {
-                linearGradient: { x1: 0, x2: 0, y1: 0, y2: 1 },
-                stops: [
-                    [0, '#2ca530'],
-                    [0.6, '#2ca530'],
-                    [1, "#ffffff"]
-                ]
-            },
-            borderRadius: '50%'
-        },
+series: [{
+    name: 'Пример данных',
+    data: [
+        [Date.UTC(2024, 7, 25), 1001.445889, false],
+        [Date.UTC(2024, 7, 26), 1002.099495, true],
+        [Date.UTC(2024, 7, 27), 1002.972822, false],
+        [Date.UTC(2024, 7, 28), 1009.050991, true],
+        [Date.UTC(2024, 7, 29), 1009.126883, false],
+        [Date.UTC(2024, 7, 30), 1009.201911, true],
+        [Date.UTC(2024, 8, 1), 1010.443734, false],
+        [Date.UTC(2024, 8, 2), 1011.693109, false],
+        [Date.UTC(2024, 8, 3), 1011.461191, true],
+        [Date.UTC(2024, 8, 4), 997.348336, false],
+        [Date.UTC(2024, 8, 5), 1000.044603, true],
+        [Date.UTC(2024, 8, 6), 1000.154379, false]
     ],
-    legend: {
-        enabled: false
+    marker: {
+        enabled: true,  // Включаем маркеры
+        radius: 8,  // Устанавливаем размер маркера
+        fillColor: 'green',  // Цвет маркера
+        lineWidth: 2,  // Толщина линии маркера
+        lineColor: 'white'  // Цвет границы маркера
+    },
+    dataLabels: {
+        enabled: true,
+        formatter: function () {
+            const firstPoint = this.series.data[0]; // Первая точка
+            const lastPoint = this.series.data[this.series.data.length - 1]; // Последняя точка
+
+            if (this.point === firstPoint) {
+                return '<div style="text-align: center; position: relative; top: 55px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color: black;">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
+            } else if (this.point === lastPoint) {
+                return '<div style="text-align: center; position: relative; top: -20px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color: rgba(144, 238, 144, 1);">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
+            } else {
+                return null;
+            }
+        },
+        useHTML: true,
+        align: 'center'
     }
-});
+}]
