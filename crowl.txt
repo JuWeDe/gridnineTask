@@ -1,114 +1,190 @@
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const data = [
-        [Date.UTC(2024, 7, 25), 1001.445889, false],
-        [Date.UTC(2024, 7, 26), 1100.099495, true],
-        [Date.UTC(2024, 7, 27), 1200.972822, false],
-        [Date.UTC(2024, 7, 28), 1202.050991, true],
-        [Date.UTC(2024, 7, 29), 1300.126883, false],
-        [Date.UTC(2024, 7, 30), 1131.201911, true],
-        [Date.UTC(2024, 8, 1), 1200.443734, false],
-        [Date.UTC(2024, 8, 2), 1250.693109, false],
-        [Date.UTC(2024, 8, 3), 1300.461191, true],
-        [Date.UTC(2024, 8, 4), 1350.348336, false],
-        [Date.UTC(2024, 8, 5), 1400.044603, true],
-        [Date.UTC(2024, 8, 6), 1500.154379, false]
-    ];
+<!DOCTYPE html>
+<html>
 
-    // Флаг для отображения вертикальных линий
-    const showVerticalLines = true;
+<head>
+    <title>Highcharts Example</title>
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+    <script src="https://code.highcharts.com/modules/annotations.js"></script>
+</head>
 
-    // Создаем аннотации на основе данных, где третий элемент равен true
-    const annotations = showVerticalLines ? data.filter(point => point[2]).map(point => ({
-        shape: 'path',
-        pathOptions: {
-            stroke: 'gray',
-            strokeWidth: 1,
-            dashStyle: 'Dash', // Пунктирная линия
-            zIndex: 5
-        },
-        points: [
-            { xAxis: 0, yAxis: 0, x: point[0], y: 0 },
-            { xAxis: 0, yAxis: 0, x: point[0], y: point[1] }
-        ]
-    })) : [];
+<body>
+    <div id="container" style="width: 100%; height: 450px; position: relative;"></div>
 
-    Highcharts.chart('container', {
-        chart: {
-            type: 'areaspline'
-        },
-        title: {
-            text: ''
-        },
-        xAxis: {
-            type: 'datetime',
-            labels: {
-                formatter: function () {
-                    let date = new Date(this.value);
-                    let day = String(date.getDate()).padStart(2, '0');
-                    let month = String(date.getMonth() + 1).padStart(2, '0');
-                    let year = date.getFullYear();
-                    return `${day}.${month}.${year}`;
+    <script>
+        // Исходные данные с датами в строковом формате
+        const data = [
+            ['2024-08-25', 1001.445889, false],
+            ['2024-08-26', 1100.099495, true],
+            ['2024-08-27', 1200.972822, false],
+            ['2024-08-28', 1202.050991, true],
+            ['2024-08-29', 1300.126883, false],
+            ['2024-08-30', 1131.201911, true],
+            ['2024-09-01', 1200.443734, false],
+            ['2024-09-02', 1250.693109, false],
+            ['2024-09-03', 1300.461191, true],
+            ['2024-09-04', 1350.348336, false],
+            ['2024-09-05', 1400.044603, true],
+            ['2024-09-06', 1500.154379, false]
+        ];
+
+        // Преобразование дат из строкового формата в Date.UTC
+        const formattedData = data.map(item => {
+            const dateParts = item[0].split('-');
+            const year = parseInt(dateParts[0]);
+            const month = parseInt(dateParts[1]) - 1; // Месяцы в JavaScript начинаются с 0
+            const day = parseInt(dateParts[2]);
+            return [Date.UTC(year, month, day), item[1], item[2]];
+        });
+
+        // Создание массива аннотаций для точек с флагом true
+        const annotations = formattedData
+            .filter(item => item[2]) // Фильтруем только те точки, где флаг true
+            .map(item => ({
+                draggable: '',
+                labelOptions: {
+                    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+                    verticalAlign: 'top',
+                    y: 15
                 },
-                align: 'center'
+                labels: [{
+                    point: {
+                        x: item[0],
+                        y: item[1],
+                        xAxis: 0,
+                        yAxis: 0
+                    },
+                    text: ''
+                }],
+                shapes: [{
+                    point: {
+                        x: item[0],
+                        y: item[1],
+                        xAxis: 0,
+                        yAxis: 0
+                    },
+                    type: 'path',
+                    points: [
+                        [item[0], 0],
+                        [item[0], 1]
+                    ],
+                    stroke: 'red',
+                    strokeWidth: 2
+                }]
+            }));
+
+        Highcharts.chart('container', {
+            chart: {
+                type: 'areaspline'
             },
-            tickInterval: 5 * 24 * 3600 * 1000, // Каждые 5 дней
-            min: Date.UTC(2024, 7, 25), // Начало оси X
-            max: Date.UTC(2024, 8, 6), // Конец оси X
-            offset: 20 // Отступ для предотвращения наложения на график
-        },
-        yAxis: {
             title: {
                 text: ''
             },
-            tickAmount: 6,
-            gridLineWidth: 0,
-            offset: 10 // Отступ для предотвращения наложения на график
-        },
-        tooltip: {
-            shared: true,
-            valueDecimals: 2
-        },
-        series: [{
-            name: 'Пример данных',
-            data: data.map(point => [point[0], point[1]]), // Используем только X и Y для графика
-            marker: {
-                enabled: true,
-                radius: 5,
-                symbol: 'circle',
-                fillColor: function () {
-                    if (this.x === Date.UTC(2024, 7, 25)) {
-                        return 'rgba(0, 100, 0, 1)';
-                    } else if (this.x === Date.UTC(2024, 8, 6)) {
-                        return 'rgba(144, 238, 144, 1)';
-                    } else {
-                        return null;
-                    }
+            xAxis: {
+                type: 'datetime',
+                offset: 10,
+                labels: {
+                    formatter: function () {
+                        let date = new Date(this.value);
+                        let day = String(date.getDate()).padStart(2, '0');
+                        let month = String(date.getMonth() + 1).padStart(2, '0');
+                        let year = date.getFullYear();
+                        return `${day}.${month}.${year}`;
+                    },
+                    align: 'center'
                 },
-                lineWidth: 0
+                tickInterval: 5 * 24 * 3600 * 1000,
+                min: Date.UTC(2024, 7, 25),
             },
-            dataLabels: {
-                enabled: true,
-                formatter: function () {
-                    if (this.point.x === Date.UTC(2024, 7, 25)) {
-                        return `<div style="text-align: center; position: relative; top: 55px;">
-                                    <span style="font-size: 16px; color: gray;">${Highcharts.dateFormat('%d.%m.%Y', this.x)}</span><br>
-                                    <span style="font-size: 24px; color: black;">${Highcharts.numberFormat(this.y, 2)}</span>
-                                </div>`;
-                    } else if (this.point.x === Date.UTC(2024, 8, 6)) {
-                        return `<div style="text-align: center; position: relative; top: -20px;">
-                                    <span style="font-size: 16px; color: gray;">${Highcharts.dateFormat('%d.%m.%Y', this.x)}</span><br>
-                                    <span style="font-size: 24px; color: rgba(144, 238, 144, 1);">${Highcharts.numberFormat(this.y, 2)}</span>
-                                </div>`;
-                    } else {
-                        return null;
-                    }
+            yAxis: {
+                title: {
+                    text: ''
                 },
-                useHTML: true,
-                align: 'center'
-            }
-        }],
-        annotations: annotations // Добавляем аннотации автоматически на основе данных
-    });
-});
-</script>
+                tickAmount: 6,
+                gridLineWidth: 0
+            },
+            tooltip: {
+                shared: true,
+                valueDecimals: 2
+            },
+            plotOptions: {
+                areaspline: {
+                    states: {
+                        hover: {
+                            enabled: false
+                        }
+                    },
+                    fillColor: {
+                        linearGradient: {
+                            x1: 0,
+                            y1: 0,
+                            x2: 0,
+                            y2: 1
+                        },
+                        stops: [
+                            [0, 'rgba(44, 162, 52, 0.9)'],
+                            [0.3, 'rgba(48, 173, 54, 0.7)'],
+                            [0.8, 'rgba(161, 232, 30, 0.2)'],
+                            [1, 'rgba(255, 255, 255, 0)']
+                        ]
+                    },
+                    color: {
+                        linearGradient: {
+                            x1: 0,
+                            y1: 0,
+                            x2: 1,
+                            y2: 0
+                        },
+                        stops: [
+                            [0, 'rgba(57, 203, 162, 1)'],
+                            [1, 'rgba(149, 217, 32, 1)']
+                        ]
+                    },
+                    marker: {
+                        radius: 4,
+                        enabled: true,
+                        fillColor: null,
+                        lineWidth: 0
+                    },
+                    lineWidth: 3,
+                    threshold: null,
+                },
+            },
+            series: [{
+                name: 'Пример данных',
+                data: formattedData,
+                marker: {
+                    enabled: true,
+                    radius: 5,
+                    symbol: 'circle',
+                    fillColor: function () {
+                        if (this.x === Date.UTC(2024, 7, 25)) {
+                            return 'rgba(0, 100, 0, 1)';
+                        } else if (this.x === Date.UTC(2024, 8, 6)) {
+                            return 'rgba(144, 238, 144, 1)';
+                        } else {
+                            return null;
+                        }
+                    },
+                    lineWidth: 0
+                },
+                dataLabels: {
+                    enabled: true,
+                    formatter: function () {
+                        if (this.point.x === Date.UTC(2024, 7, 25)) {
+                            return '<div style="text-align: center; position: relative; top: 5px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color: black;">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
+                        } else if (this.point.x === Date.UTC(2024, 8, 6)) {
+                            return '<div style="text-align: center; position: relative; top: -60px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color:rgba(33, 160, 56, 1);">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
+                        } else {
+                            return null;
+                        }
+                    },
+                    useHTML: true,
+                    align: 'center'
+                }
+            }],
+            annotations: annotations
+        });
+    </script>
+</body>
+
+</html>
