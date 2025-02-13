@@ -41,34 +41,14 @@
             .filter(item => item[2]) // Фильтруем только те точки, где флаг true
             .map(item => ({
                 draggable: '',
-                labelOptions: {
-                    backgroundColor: 'rgba(255, 255, 255, 0.5)',
-                    verticalAlign: 'top',
-                    y: 15
-                },
-                labels: [{
-                    point: {
-                        x: item[0],
-                        y: item[1],
-                        xAxis: 0,
-                        yAxis: 0
-                    },
-                    text: ''
-                }],
                 shapes: [{
-                    point: {
-                        x: item[0],
-                        y: item[1],
-                        xAxis: 0,
-                        yAxis: 0
-                    },
                     type: 'path',
                     points: [
-                        [item[0], 0],
-                        [item[0], 1]
+                        [item[0], 0], // Начало линии на оси X
+                        [item[0], item[1]] // Конец линии на уровне значения Y
                     ],
-                    stroke: 'red',
-                    strokeWidth: 2
+                    stroke: 'red', // Цвет линии
+                    strokeWidth: 2, // Толщина линии
                 }]
             }));
 
