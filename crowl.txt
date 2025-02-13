@@ -36,20 +36,14 @@
             return [Date.UTC(year, month, day), item[1], item[2]];
         });
 
-        // Создание массива аннотаций для точек с флагом true
-        const annotations = formattedData
+        // Создание массива plotLines для точек с флагом true
+        const plotLines = formattedData
             .filter(item => item[2]) // Фильтруем только те точки, где флаг true
             .map(item => ({
-                draggable: '',
-                shapes: [{
-                    type: 'path',
-                    points: [
-                        [item[0], 0], // Начало линии на оси X
-                        [item[0], item[1]] // Конец линии на уровне значения Y
-                    ],
-                    stroke: 'red', // Цвет линии
-                    strokeWidth: 2, // Толщина линии
-                }]
+                color: 'red', // Цвет линии
+                width: 2, // Толщина линии
+                value: item[0], // Позиция линии на оси X
+                zIndex: 5 // Уровень слоя (чтобы линии были поверх графика)
             }));
 
         Highcharts.chart('container', {
@@ -74,6 +68,7 @@
                 },
                 tickInterval: 5 * 24 * 3600 * 1000,
                 min: Date.UTC(2024, 7, 25),
+                plotLines: plotLines // Добавляем вертикальные линии
             },
             yAxis: {
                 title: {
@@ -161,8 +156,7 @@
                     useHTML: true,
                     align: 'center'
                 }
-            }],
-            annotations: annotations
+            }]
         });
     </script>
 </body>
