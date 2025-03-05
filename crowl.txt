@@ -1,170 +1,244 @@
-<!DOCTYPE html>
-<html>
+module.exports.template = (data) => {
 
-<head>
-    <title>Highcharts Example</title>
-    <script src="https://code.highcharts.com/highcharts.js"></script>
-    <script src="https://code.highcharts.com/modules/annotations.js"></script>
-</head>
+    let warning = "";
 
-<body>
-    <div id="container" style="width: 100%; height: 450px; position: relative;"></div>
+    function getData() {
+      const transformedData = data[0].data.map(item => {
+        const dateParts = item[0].split('-');
+        const newDateFormat = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
+        return [newDateFormat, item[1], item[2]];
+      });
+      return transformedData;
+    }
 
-    <script>
-        // Исходные данные с датами в строковом формате
-        const data = [
-            ['2024-08-25', 1001.445889, false],
-            ['2024-08-26', 1100.099495, true],
-            ['2024-08-27', 1200.972822, false],
-            ['2024-08-28', 1202.050991, true],
-            ['2024-08-29', 1300.126883, false],
-            ['2024-08-30', 1131.201911, true],
-            ['2024-09-01', 1200.443734, false],
-            ['2024-09-02', 1250.693109, false],
-            ['2024-09-03', 1300.461191, true],
-            ['2024-09-04', 1350.348336, false],
-            ['2024-09-05', 1400.044603, true],
-            ['2024-09-06', 1500.154379, false]
-        ];
+    const formattedData = getData();
 
-        // Преобразование дат из строкового формата в Date.UTC
-        const formattedData = data.map(item => {
-            const dateParts = item[0].split('-');
-            const year = parseInt(dateParts[0]);
-            const month = parseInt(dateParts[1]) - 1; // Месяцы в JavaScript начинаются с 0
-            const day = parseInt(dateParts[2]);
-            return [Date.UTC(year, month, day), item[1], item[2]];
-        });
+    const keyDates = [
+      formattedData[0][0],          // Первая дата
+      formattedData[Math.floor(formattedData.length / 4)][0],
+      formattedData[Math.floor(formattedData.length / 2)][0],
+      formattedData[Math.floor(formattedData.length * 3 / 4)][0],
+      formattedData[formattedData.length - 1][0]
+    ];
 
-        // Создание массива аннотаций для точек с флагом true
-        const annotations = formattedData
-            .filter(item => item[2]) // Фильтруем только те точки, где флаг true
-            .map(item => ({
-                draggable: '',
-                shapes: [{
-                    type: 'path',
-                    points: [
-                        [item[0], 0], // Начало линии на оси X
-                        [item[0], item[1]] // Конец линии на уровне значения Y
-                    ],
-                    stroke: 'rgba(128, 128, 128, 0.5)', // Серый цвет с прозрачностью
-                    strokeWidth: 2, // Толщина линии
-                }]
-            }));
+    const allCategories = Array.from(new Set(formattedData.map(d => d[0])));
 
-        Highcharts.chart('container', {
-            chart: {
-                type: 'areaspline'
-            },
-            title: {
-                text: ''
-            },
-            xAxis: {
-                type: 'datetime',
-                offset: 10,
-                labels: {
-                    formatter: function () {
-                        let date = new Date(this.value);
-                        let day = String(date.getDate()).padStart(2, '0');
-                        let month = String(date.getMonth() + 1).padStart(2, '0');
-                        let year = date.getFullYear();
-                        return `${day}.${month}.${year}`;
-                    },
-                    align: 'center'
-                },
-                tickInterval: 5 * 24 * 3600 * 1000,
-                min: Date.UTC(2024, 7, 25),
-            },
-            yAxis: {
-                title: {
-                    text: ''
-                },
-                tickAmount: 6,
-                gridLineWidth: 0
-            },
-            tooltip: {
-                shared: true,
-                valueDecimals: 2
-            },
-            plotOptions: {
-                areaspline: {
-                    states: {
-                        hover: {
-                            enabled: false
-                        }
-                    },
-                    fillColor: {
-                        linearGradient: {
-                            x1: 0,
-                            y1: 0,
-                            x2: 0,
-                            y2: 1
-                        },
-                        stops: [
-                            [0, 'rgba(44, 162, 52, 0.9)'],
-                            [0.3, 'rgba(48, 173, 54, 0.7)'],
-                            [0.8, 'rgba(161, 232, 30, 0.2)'],
-                            [1, 'rgba(255, 255, 255, 0)']
-                        ]
-                    },
-                    color: {
-                        linearGradient: {
-                            x1: 0,
-                            y1: 0,
-                            x2: 1,
-                            y2: 0
-                        },
-                        stops: [
-                            [0, 'rgba(57, 203, 162, 1)'],
-                            [1, 'rgba(149, 217, 32, 1)']
-                        ]
-                    },
-                    marker: {
-                        radius: 4,
-                        enabled: true,
-                        fillColor: null,
-                        lineWidth: 0
-                    },
-                    lineWidth: 3,
-                    threshold: null,
-                },
-            },
-            series: [{
-                name: 'Пример данных',
-                data: formattedData,
-                marker: {
-                    enabled: true,
-                    radius: 5,
-                    symbol: 'circle',
-                    fillColor: function () {
-                        if (this.x === Date.UTC(2024, 7, 25)) {
-                            return 'rgba(0, 100, 0, 1)';
-                        } else if (this.x === Date.UTC(2024, 8, 6)) {
-                            return 'rgba(144, 238, 144, 1)';
-                        } else {
-                            return null;
-                        }
-                    },
-                    lineWidth: 0
-                },
-                dataLabels: {
-                    enabled: true,
-                    formatter: function () {
-                        if (this.point.x === Date.UTC(2024, 7, 25)) {
-                            return '<div style="text-align: center; position: relative; top: 5px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color: black;">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
-                        } else if (this.point.x === Date.UTC(2024, 8, 6)) {
-                            return '<div style="text-align: center; position: relative; top: -60px;"><span style="font-size: 16px; color: gray;">' + Highcharts.dateFormat('%d.%m.%Y', this.x) + '</span><br><span style="font-size: 24px; color:rgba(33, 160, 56, 1);">' + Highcharts.numberFormat(this.y, 2) + '</span></div>';
-                        } else {
-                            return null;
-                        }
-                    },
-                    useHTML: true,
-                    align: 'center'
+    const negativeAreaColors = [
+        [0, 'rgba(48, 194, 152, 0.9)'],  // если график падения
+        [0.3, 'rgba(58, 204, 162, 0.7)'],
+        [0.8, 'rgba(161, 232, 30, 0.2)'],
+        [1, 'rgba(255, 255, 255, 0)']
+    ]
+
+    const negativeLineColors = [
+        [0, 'rgba(80, 248, 201, 1)'],     // если график падения
+        [1, 'rgba(57, 203, 162, 1)'],
+    ]
+
+    const positiveAreaColors = [
+        [0, 'rgba(44, 162, 52, 0.9)'],
+        [0.3, 'rgba(48, 173, 54, 0.7)'],
+        [0.8, 'rgba(161, 232, 30, 0.2)'],
+        [1, 'rgba(255, 255, 255, 0)']
+    ]
+
+    const positiveLineColors = [
+        [0, 'rgba(57, 203, 162, 1)'],
+        [1, 'rgba(149, 217, 32, 1)']
+    ]
+
+    areaColors = []
+    lineColors = []
+
+    if (Number.parseFloat(getData()[0][1]) > Number.parseFloat(getData()[getData().length - 1][1])) {
+        areaColors = negativeAreaColors
+        lineColors = negativeLineColors
+    } else {
+        areaColors = positiveAreaColors
+        lineColors = positiveLineColors
+    }
+
+    // аннотации в виде вертикальных полос
+    const annotations = formattedData
+        .filter(item => item[2]) // Фильтруем только те точки, где флаг true
+        .map(item => ({
+            draggable: '',
+            shapes: [{
+                type: 'path',
+                points: [{
+                    xAxis: 0, yAxis: 0, x: item[0], y: 0
+                }, {
+                    xAxis: 0, yAxis: 0, x: item[0], y: item[1]
                 }
-            }],
-            annotations: annotations
-        });
-    </script>
-</body>
+                ],
+                dashStyle: 'Solid',
+                stroke: 'rgba(0, 0, 0, 0.8)',
+                strokeWidth: 0.75,
+            }]
+        }));
 
-</html>
+    let metaInf = validateMetaInf();
+
+    function validateMetaInf() {
+        if (data[0]["Meta-Inf"]) {
+            return data[0]["Meta-Inf"];
+        }
+        warning += "'Meta-Inf' is undefined or null or empty;";
+        return {};
+    }
+
+    function getField(metaInf, nameField, defaultValue) {
+        if (typeof metaInf[nameField] === 'undefined' || metaInf[nameField] === null) {
+            warning += "'" + nameField + "' is undefined or null, use default " + nameField + " = " + defaultValue + ";";
+            return defaultValue;
+        }
+        return metaInf[nameField];
+    }
+
+    return {
+        template: {
+            type: 'png',
+            options: {
+                chart: {
+                    type: 'areaspline',
+                    style: {
+                        fontFamily: 'SB Sans Display',
+                        fontSize: '26',
+                    }
+                },
+                legend: {
+                    enabled: false
+                },
+                title: {
+                    text: '',
+                    align: 'left'
+                } ,
+                xAxis: {
+                    categories: allCategories,  // Все возможные категории
+                    labels: {
+                        rotation: 0,  // Убираем поворот меток
+                        style: {
+                            fontFamily: 'SB Sans Display',
+                            fontSize: '26',
+                        },
+                        step: 1,  // Показываем каждую метку
+                        staggerLines: 0,  // Чтобы избежать наложения меток
+                        formatter: function () {  // Отображаем только нужные метки
+                            if (keyDates.includes(this.value)) {
+                                return this.value;
+                            } else {
+                                return '';
+                            }
+                        }
+                    },
+                },
+                yAxis: {
+                    title: {
+                        text: ''
+                    },
+                    labels: {
+
+                        style: {
+                            fontFamily: 'SB Sans Display',
+                            fontSize: '26',
+                        },
+                    },
+
+                    tickAmount: 6,
+                    gridLineWidth: 0
+                },
+                tooltip: {
+                    shared: true,
+                    valueDecimals: 2
+                },
+                plotOptions: {
+                    areaspline: {
+                        states: {
+                            hover: {
+                                enabled: false
+                            }
+                        },
+                        fillColor: {
+                            linearGradient: {
+                                x1: 0,
+                                y1: 0,
+                                x2: 0,
+                                y2: 1
+                            },
+                            stops: areaColors
+                        },
+                        color: {
+                            linearGradient: {
+                                x1: 0,
+                                y1: 0,
+                                x2: 1,
+                                y2: 0
+                            },
+                            stops: lineColors
+                        },
+                        marker: {
+                            radius: 0,
+                            enabled: true,
+                            fillColor: null,
+                            lineWidth: 0
+                        },
+                        lineWidth: 3,
+                        threshold: null,
+                    },
+                },
+                series: [{
+                    name: '',
+                    data: formattedData.map((point, index) => {
+                        return {
+                            x: index,
+                            y: point[1],
+                            dataLabels: {
+                                enabled: index === 0 || index === formattedData.length - 1,
+                                useHTML: true,
+                                formatter: function () {
+                                    if (index === 0) {
+                                        return `<div style="text-align: center; position: relative; top: 30px; right: -40px"> <span style="font-size: 16px; color: gray;">${formattedData[index][0]}</span><br> <span style="font-size: 24px; color: black;">${Highcharts.numberFormat(this.y, 2)}</span> </div>`;
+                                    } else if (index === formattedData.length - 1) {
+                                        return `<div style="text-align: center; box-shadow: 0 0 10px 5px rgba(228, 228, 228, 0.5); position: relative; top: -60px; width: 150px; padding-top: 45px; height: 100px; background-color: rgba(246, 246, 246, 0.5); border-radius: 50%; justify-content: center; align-items: center; left: -20px"> <span style="font-size: 16px; color: gray;">${formattedData[index][0]}</span><br> <span style="font-size: 24px; color:rgba(33, 160, 56, 1);">${Highcharts.numberFormat(this.y, 2)}</span> </div>`;
+                                    } else {
+                                        return null;
+                                    }
+                                },
+                                align: 'center'
+                            }
+                        };
+                    }),
+                    dataLabels: {
+                        inside: true,
+                        verticalAlign: 'middle',
+                        y: 15,
+                        style: {
+                            fontWeight: 'bold'
+                        }
+                    }
+                }],
+                annotations: annotations,
+                exporting: {
+                    chartOptions: {
+                        chart: {
+                            style: {
+                                fontSize: '26',
+                                fontFamily: 'SB Sans Display',
+                            }
+                        }
+                    },
+                    sourceWidth: getField(metaInf, "width", 1280),
+                    sourceHeight: getField(metaInf, "height", 720),
+                    allowHTML: true,
+                  	useHTML: true,
+                    type: 'image/png'
+                },
+                credits: {
+                    enabled: false
+                }
+            }
+
+        },
+        warning: warning == "" ? "OK" : warning
+    };
+}
