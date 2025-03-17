@@ -1,244 +1,55 @@
-module.exports.template = (data) => {
+package main
 
-    let warning = "";
+import (
+    "fmt"
+    "time"
+)
 
-    function getData() {
-      const transformedData = data[0].data.map(item => {
-        const dateParts = item[0].split('-');
-        const newDateFormat = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
-        return [newDateFormat, item[1], item[2]];
-      });
-      return transformedData;
+type Triangle struct {
+    A, B, C int
+}
+
+type Time struct {
+    Seconds int
+}
+
+func reverseNumber(n int) int {
+    return (n%10)*100 + (n/10%10)*10 + n/100
+}
+
+func (t Triangle) IsRight() string {
+    switch {
+    case t.A*t.A+t.B*t.B == t.C*t.C:
+        return "Прямоугольный"
+    default:
+        return "Непрямоугольный"
     }
+}
 
-    const formattedData = getData();
+func (t Time) ToHoursMinutes() (int, int) {
+    hours := t.Seconds / 3600
+    minutes := (t.Seconds % 3600) / 60
+    return hours, minutes
+}
 
-    const keyDates = [
-      formattedData[0][0],          // Первая дата
-      formattedData[Math.floor(formattedData.length / 4)][0],
-      formattedData[Math.floor(formattedData.length / 2)][0],
-      formattedData[Math.floor(formattedData.length * 3 / 4)][0],
-      formattedData[formattedData.length - 1][0]
-    ];
+func main() {
+    const number = 843
+    triangle := Triangle{A: 6, B: 8, C: 10}
+    timeData := Time{Seconds: 13257}
 
-    const allCategories = Array.from(new Set(formattedData.map(d => d[0])));
+    // Задача 1
+    reversed := reverseNumber(number)
+    fmt.Printf("Перевернутое число: %d\n", reversed)
 
-    const negativeAreaColors = [
-        [0, 'rgba(48, 194, 152, 0.9)'],  // если график падения
-        [0.3, 'rgba(58, 204, 162, 0.7)'],
-        [0.8, 'rgba(161, 232, 30, 0.2)'],
-        [1, 'rgba(255, 255, 255, 0)']
-    ]
+    // Задача 2
+    result := triangle.IsRight()
+    fmt.Println(result)
 
-    const negativeLineColors = [
-        [0, 'rgba(80, 248, 201, 1)'],     // если график падения
-        [1, 'rgba(57, 203, 162, 1)'],
-    ]
+    // Задача 3
+    hours, minutes := timeData.ToHoursMinutes()
+    fmt.Printf("It is %d hours %d minutes.\n", hours, minutes)
 
-    const positiveAreaColors = [
-        [0, 'rgba(44, 162, 52, 0.9)'],
-        [0.3, 'rgba(48, 173, 54, 0.7)'],
-        [0.8, 'rgba(161, 232, 30, 0.2)'],
-        [1, 'rgba(255, 255, 255, 0)']
-    ]
-
-    const positiveLineColors = [
-        [0, 'rgba(57, 203, 162, 1)'],
-        [1, 'rgba(149, 217, 32, 1)']
-    ]
-
-    areaColors = []
-    lineColors = []
-
-    if (Number.parseFloat(getData()[0][1]) > Number.parseFloat(getData()[getData().length - 1][1])) {
-        areaColors = negativeAreaColors
-        lineColors = negativeLineColors
-    } else {
-        areaColors = positiveAreaColors
-        lineColors = positiveLineColors
-    }
-
-    // аннотации в виде вертикальных полос
-    const annotations = formattedData
-        .filter(item => item[2]) // Фильтруем только те точки, где флаг true
-        .map(item => ({
-            draggable: '',
-            shapes: [{
-                type: 'path',
-                points: [{
-                    xAxis: 0, yAxis: 0, x: item[0], y: 0
-                }, {
-                    xAxis: 0, yAxis: 0, x: item[0], y: item[1]
-                }
-                ],
-                dashStyle: 'Solid',
-                stroke: 'rgba(0, 0, 0, 0.8)',
-                strokeWidth: 0.75,
-            }]
-        }));
-
-    let metaInf = validateMetaInf();
-
-    function validateMetaInf() {
-        if (data[0]["Meta-Inf"]) {
-            return data[0]["Meta-Inf"];
-        }
-        warning += "'Meta-Inf' is undefined or null or empty;";
-        return {};
-    }
-
-    function getField(metaInf, nameField, defaultValue) {
-        if (typeof metaInf[nameField] === 'undefined' || metaInf[nameField] === null) {
-            warning += "'" + nameField + "' is undefined or null, use default " + nameField + " = " + defaultValue + ";";
-            return defaultValue;
-        }
-        return metaInf[nameField];
-    }
-
-    return {
-        template: {
-            type: 'png',
-            options: {
-                chart: {
-                    type: 'areaspline',
-                    style: {
-                        fontFamily: 'SB Sans Display',
-                        fontSize: '26',
-                    }
-                },
-                legend: {
-                    enabled: false
-                },
-                title: {
-                    text: '',
-                    align: 'left'
-                } ,
-                xAxis: {
-                    categories: allCategories,  // Все возможные категории
-                    labels: {
-                        rotation: 0,  // Убираем поворот меток
-                        style: {
-                            fontFamily: 'SB Sans Display',
-                            fontSize: '26',
-                        },
-                        step: 1,  // Показываем каждую метку
-                        staggerLines: 0,  // Чтобы избежать наложения меток
-                        formatter: function () {  // Отображаем только нужные метки
-                            if (keyDates.includes(this.value)) {
-                                return this.value;
-                            } else {
-                                return '';
-                            }
-                        }
-                    },
-                },
-                yAxis: {
-                    title: {
-                        text: ''
-                    },
-                    labels: {
-
-                        style: {
-                            fontFamily: 'SB Sans Display',
-                            fontSize: '26',
-                        },
-                    },
-
-                    tickAmount: 6,
-                    gridLineWidth: 0
-                },
-                tooltip: {
-                    shared: true,
-                    valueDecimals: 2
-                },
-                plotOptions: {
-                    areaspline: {
-                        states: {
-                            hover: {
-                                enabled: false
-                            }
-                        },
-                        fillColor: {
-                            linearGradient: {
-                                x1: 0,
-                                y1: 0,
-                                x2: 0,
-                                y2: 1
-                            },
-                            stops: areaColors
-                        },
-                        color: {
-                            linearGradient: {
-                                x1: 0,
-                                y1: 0,
-                                x2: 1,
-                                y2: 0
-                            },
-                            stops: lineColors
-                        },
-                        marker: {
-                            radius: 0,
-                            enabled: true,
-                            fillColor: null,
-                            lineWidth: 0
-                        },
-                        lineWidth: 3,
-                        threshold: null,
-                    },
-                },
-                series: [{
-                    name: '',
-                    data: formattedData.map((point, index) => {
-                        return {
-                            x: index,
-                            y: point[1],
-                            dataLabels: {
-                                enabled: index === 0 || index === formattedData.length - 1,
-                                useHTML: true,
-                                formatter: function () {
-                                    if (index === 0) {
-                                        return `<div style="text-align: center; position: relative; top: 30px; right: -40px"> <span style="font-size: 16px; color: gray;">${formattedData[index][0]}</span><br> <span style="font-size: 24px; color: black;">${Highcharts.numberFormat(this.y, 2)}</span> </div>`;
-                                    } else if (index === formattedData.length - 1) {
-                                        return `<div style="text-align: center; box-shadow: 0 0 10px 5px rgba(228, 228, 228, 0.5); position: relative; top: -60px; width: 150px; padding-top: 45px; height: 100px; background-color: rgba(246, 246, 246, 0.5); border-radius: 50%; justify-content: center; align-items: center; left: -20px"> <span style="font-size: 16px; color: gray;">${formattedData[index][0]}</span><br> <span style="font-size: 24px; color:rgba(33, 160, 56, 1);">${Highcharts.numberFormat(this.y, 2)}</span> </div>`;
-                                    } else {
-                                        return null;
-                                    }
-                                },
-                                align: 'center'
-                            }
-                        };
-                    }),
-                    dataLabels: {
-                        inside: true,
-                        verticalAlign: 'middle',
-                        y: 15,
-                        style: {
-                            fontWeight: 'bold'
-                        }
-                    }
-                }],
-                annotations: annotations,
-                exporting: {
-                    chartOptions: {
-                        chart: {
-                            style: {
-                                fontSize: '26',
-                                fontFamily: 'SB Sans Display',
-                            }
-                        }
-                    },
-                    sourceWidth: getField(metaInf, "width", 1280),
-                    sourceHeight: getField(metaInf, "height", 720),
-                    allowHTML: true,
-                  	useHTML: true,
-                    type: 'image/png'
-                },
-                credits: {
-                    enabled: false
-                }
-            }
-
-        },
-        warning: warning == "" ? "OK" : warning
-    };
+    // Дополнительно: использование time.Duration
+    duration := time.Duration(timeData.Seconds) * time.Second
+    fmt.Printf("It is %s.\n", duration)
 }
