@@ -1,106 +1,123 @@
+module.exports.template = (data) => {
+    let warning = "";
 
-=== no structures ===
-
-package main
-
-import (
-    "fmt"
-    "math"
-)
-
-func reverseNumber(n int) int {
-    return (n%10)*100 + (n/10%10)*10 + n/100
-}
-
-func isRightTriangle(a, b, c int) string {
-    if a*a+b*b == c*c {
-        return "Прямоугольный"
+    function getData() {
+        return data[0]?.data;
     }
-    return "Непрямоугольный"
-}
 
-func timeFromSeconds(k int) (int, int) {
-    hours := k / 3600
-    minutes := (k % 3600) / 60
-    return hours, minutes
-}
+    // Удалена заглушка data = [...]
+    // Используем переданные данные
 
-func main() {
-    number := 843
-    a, b, c := 6, 8, 10
-    seconds := 13257
-
-    // Задача 1
-    reversed := reverseNumber(number)
-    fmt.Printf("Перевернутое число: %d\n", reversed)
-
-    // Задача 2
-    result := isRightTriangle(a, b, c)
-    fmt.Println(result)
-
-    // Задача 3
-    hours, minutes := timeFromSeconds(seconds)
-    fmt.Printf("It is %d hours %d minutes.\n", hours, minutes)
-}
-
-
-=== added structures ===
-
-
-
-
-package main
-
-import (
-    "fmt"
-    "time"
-)
-
-type Triangle struct {
-    A, B, C int
-}
-
-type Time struct {
-    Seconds int
-}
-
-func reverseNumber(n int) int {
-    return (n%10)*100 + (n/10%10)*10 + n/100
-}
-
-func (t Triangle) IsRight() string {
-    switch {
-    case t.A*t.A+t.B*t.B == t.C*t.C:
-        return "Прямоугольный"
-    default:
-        return "Непрямоугольный"
+    const transformedData = getData();
+    if (!transformedData || !Array.isArray(transformedData)) {
+        warning += "Transformed data is not an array.";
+        return {
+            template: {},
+            warning: warning
+        };
     }
-}
 
-func (t Time) ToHoursMinutes() (int, int) {
-    hours := t.Seconds / 3600
-    minutes := (t.Seconds % 3600) / 60
-    return hours, minutes
-}
+    function validateMetaInf() {
+        if (data[0]?.["Meta-Inf"]) {
+            return data[0]["Meta-Inf"];
+        }
+        warning += "'Meta-Inf' is undefined or null or empty;";
+        return {};
+    }
 
-func main() {
-    const number = 843
-    triangle := Triangle{A: 6, B: 8, C: 10}
-    timeData := Time{Seconds: 13257}
+    let metaInf = validateMetaInf();
 
-    // Задача 1
-    reversed := reverseNumber(number)
-    fmt.Printf("Перевернутое число: %d\n", reversed)
+    function getField(metaInf, nameField, defaultValue) {
+        if (typeof metaInf[nameField] === 'undefined' || metaInf[nameField] === null) {
+            warning += "'" + nameField + "' is undefined or null, use default " + nameField + " = " + defaultValue + ";";
+            return defaultValue;
+        }
+        return metaInf[nameField];
+    }
 
-    // Задача 2
-    result := triangle.IsRight()
-    fmt.Println(result)
+    const categoriesLeft = transformedData.map(item => item.name);
+    const categoriesRight = transformedData.map(item => item.y);
 
-    // Задача 3
-    hours, minutes := timeData.ToHoursMinutes()
-    fmt.Printf("It is %d hours %d minutes.\n", hours, minutes)
+    // Преобразование значений в числа с обработкой ошибок
+    const numericValues = categoriesRight.map(item => {
+        const num = parseFloat(item.replace(/%/g, '').replace(',', '.'));
+        return isNaN(num) ? 0 : num;
+    });
 
-    // Дополнительно: использование time.Duration
-    duration := time.Duration(timeData.Seconds) * time.Second
-    fmt.Printf("It is %s.\n", duration)
-}
+    if (numericValues.length === 0) {
+        warning += "No valid numeric data;";
+        return {
+            template: {},
+            warning: warning
+        };
+    }
+
+    // Находим максимальное абсолютное значение
+    const maxAbsoluteValue = Math.max(...numericValues.map(Math.abs));
+
+    // Рассчитываем границы с коэффициентом 1.6
+    const axisLimit = maxAbsoluteValue * 1.6;
+
+    return {
+        template: {
+            type: 'jpeg',
+            options: {
+                chart: {
+                    inverted: true,
+                    type: 'column',
+                },
+                title: { text: '', align: 'left' },
+                xAxis: [{
+                    categories: categoriesLeft,
+                    reversed: true,
+                    visible: false
+                }, {
+                    opposite: true,
+                    reversed: false,
+                    visible: false,
+                    categories: categoriesRight,
+                    linkedTo: 0,
+                }],
+                yAxis: {
+                    max: axisLimit,
+                    min: -axisLimit,
+                    visible: false
+                },
+                series: [
+                    {
+                        name: 'leftShadow',
+                        data: Array(categoriesRight.length).fill(-axisLimit),
+                        color: '#f2f2f2',
+                        borderRadius: '80%'
+                    }, {
+                        name: 'rightShadow',
+                        data: Array(categoriesRight.length).fill(axisLimit),
+                        color: '#f2f2f2',
+                        borderRadius: '80%',
+                    },
+                    {
+                        name: 'left',
+                        data: numericValues.map(v => v <= 0 ? v : 0),
+                        color: { /* ... */ },
+                        borderRadius: '80%'
+                    }, {
+                        name: 'right',
+                        data: numericValues.map(v => v > 0 ? v : 0),
+                        color: { /* ... */ },
+                        borderRadius: '50%'
+                    },
+                ],
+                legend: { enabled: false },
+                plotOptions: { column: { grouping: false, shadow: false } },
+                exporting: {
+                    sourceWidth: getField(metaInf, "width", 5000),
+                    sourceHeight: getField(metaInf, "height", 300),
+                    allowHTML: true,
+                    type: 'image/jpeg'
+                },
+                credits: { enabled: false }
+            }
+        },
+        warning: warning || "OK"
+    };
+};
