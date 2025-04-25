@@ -1,24 +1,30 @@
-module.exports.template = (data) => {
+module.exports.template = (data) => { 
     let warning = "";
 
     function getData() {
-        return data[0]?.data;
+        return data[0].data;
     }
 
-    // Удалена заглушка data = [...]
-    // Используем переданные данные
+    // Проверка входных данных
+    if (!data || !Array.isArray(data) || !data[0] || !data[0].data) {
+        warning += "Invalid input data format;";
+        return {
+            template: {},
+            warning: warning || "OK"
+        };
+    }
 
     const transformedData = getData();
     if (!transformedData || !Array.isArray(transformedData)) {
         warning += "Transformed data is not an array.";
         return {
             template: {},
-            warning: warning
+            warning: warning || "OK"
         };
     }
 
     function validateMetaInf() {
-        if (data[0]?.["Meta-Inf"]) {
+        if (data[0]["Meta-Inf"]) {
             return data[0]["Meta-Inf"];
         }
         warning += "'Meta-Inf' is undefined or null or empty;";
@@ -26,6 +32,8 @@ module.exports.template = (data) => {
     }
 
     let metaInf = validateMetaInf();
+    const categoriesLeft = [];
+    const categoriesRight = [];
 
     function getField(metaInf, nameField, defaultValue) {
         if (typeof metaInf[nameField] === 'undefined' || metaInf[nameField] === null) {
@@ -35,28 +43,24 @@ module.exports.template = (data) => {
         return metaInf[nameField];
     }
 
-    const categoriesLeft = transformedData.map(item => item.name);
-    const categoriesRight = transformedData.map(item => item.y);
+    for (let i = 0; i < transformedData.length; i++) {
+        categoriesLeft.push(transformedData[i].name);
+        categoriesRight.push(transformedData[i].y);
+    }
 
-    // Преобразование значений в числа с обработкой ошибок
     const numericValues = categoriesRight.map(item => {
-        const num = parseFloat(item.replace(/%/g, '').replace(',', '.'));
+        const num = parseFloat(item.replace(/%/g, '').replace('+', ''));
         return isNaN(num) ? 0 : num;
     });
 
-    if (numericValues.length === 0) {
-        warning += "No valid numeric data;";
-        return {
-            template: {},
-            warning: warning
-        };
-    }
+    // Находим максимальное абсолютное значение для симметричной шкалы
+    const maxAbsValue = Math.max(
+        Math.abs(Math.max(...numericValues)),
+        Math.abs(Math.min(...numericValues))
+    );
 
-    // Находим максимальное абсолютное значение
-    const maxAbsoluteValue = Math.max(...numericValues.map(Math.abs));
-
-    // Рассчитываем границы с коэффициентом 1.6
-    const axisLimit = maxAbsoluteValue * 1.6;
+    const dataPos = numericValues.map(value => value > 0 ? value : 0);
+    const dataNeg = numericValues.map(value => value <= 0 ? value : 0);
 
     return {
         template: {
@@ -66,7 +70,10 @@ module.exports.template = (data) => {
                     inverted: true,
                     type: 'column',
                 },
-                title: { text: '', align: 'left' },
+                title: {
+                    text: '',
+                    align: 'left'
+                },
                 xAxis: [{
                     categories: categoriesLeft,
                     reversed: true,
@@ -79,45 +86,52 @@ module.exports.template = (data) => {
                     linkedTo: 0,
                 }],
                 yAxis: {
-                    max: axisLimit,
-                    min: -axisLimit,
+                    max: maxAbsValue * 1.6,
+                    min: -maxAbsValue * 1.6,
                     visible: false
                 },
                 series: [
                     {
                         name: 'leftShadow',
-                        data: Array(categoriesRight.length).fill(-axisLimit),
+                        data: Array(categoriesRight.length).fill(-maxAbsValue * 1.6),
                         color: '#f2f2f2',
                         borderRadius: '80%'
                     }, {
                         name: 'rightShadow',
-                        data: Array(categoriesRight.length).fill(axisLimit),
+                        data: Array(categoriesRight.length).fill(maxAbsValue * 1.6),
                         color: '#f2f2f2',
                         borderRadius: '80%',
                     },
                     {
                         name: 'left',
-                        data: numericValues.map(v => v <= 0 ? v : 0),
-                        color: { /* ... */ },
+                        data: dataNeg,
+                        color: {
+                            linearGradient: {x1: 0, x2: 0, y1: 0, y2: 1},
+                            stops: [
+                                [0, "#ffffff"],
+                                [0.4, '#a6a6a6'],
+                                [1, '#a6a6a6']
+                            ]
+                        },
                         borderRadius: '80%'
                     }, {
                         name: 'right',
-                        data: numericValues.map(v => v > 0 ? v : 0),
-                        color: { /* ... */ },
+                        data: dataPos,
+                        color: {
+                            linearGradient: {x1: 0, x2: 0, y1: 0, y2: 1},
+                            stops: [
+                                [0, '#2ca530'],
+                                [0.6, '#2ca530'],
+                                [1, "#ffffff"]
+                            ]
+                        },
                         borderRadius: '50%'
                     },
                 ],
-                legend: { enabled: false },
-                plotOptions: { column: { grouping: false, shadow: false } },
-                exporting: {
-                    sourceWidth: getField(metaInf, "width", 5000),
-                    sourceHeight: getField(metaInf, "height", 300),
-                    allowHTML: true,
-                    type: 'image/jpeg'
+                legend: {
+                    enabled: false
                 },
-                credits: { enabled: false }
-            }
-        },
-        warning: warning || "OK"
-    };
-};
+                plotOptions: {
+                    column: {
+                        grouping: false,
+                        shadow: false
